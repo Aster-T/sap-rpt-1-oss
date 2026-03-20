@@ -145,3 +145,6 @@ mlruns/**
 # PyCharm
 .idea/
 **.sql
+
+## Datasets
+datasets/

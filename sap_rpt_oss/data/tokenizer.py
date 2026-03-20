@@ -243,8 +243,7 @@ class Tokenizer:
 
             if self.regression_type == 'l2':
                 labels, _, _ = self.standard_scale_column(y_context, y_query)
-                if self.regression_type == 'l2':
-                    data['target'] = torch.tensor(labels)
+                data['target'] = torch.tensor(labels)
         else:
             is_clustering = 'clustering' in self.classification_type
             labels_lower_bin, label_classes = self.build_labels(y_context, y_query, is_clustering=is_clustering)

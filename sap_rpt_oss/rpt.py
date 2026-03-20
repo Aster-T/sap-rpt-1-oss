@@ -8,10 +8,10 @@ from math import ceil
 from pathlib import Path
 from typing import Literal, Optional, Union
 
-from huggingface_hub import hf_hub_download
 import numpy as np
 import pandas as pd
 import torch
+from huggingface_hub import hf_hub_download
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_is_fitted
@@ -20,10 +20,15 @@ from sap_rpt_oss.constants import ModelSize
 from sap_rpt_oss.data.tokenizer import Tokenizer
 from sap_rpt_oss.model.torch_model import RPT
 
-warnings.filterwarnings('ignore', message='.*not support non-writable tensors.*')
+warnings.filterwarnings("ignore", message=".*not support non-writable tensors.*")
 
 
-def to_device(x, device: Union[torch.device, int], dtype: Optional[torch.dtype] = None, raise_on_unexpected=True):
+def to_device(
+    x,
+    device: Union[torch.device, int],
+    dtype: Optional[torch.dtype] = None,
+    raise_on_unexpected=True,
+):
     for k, v in x.items():
         if isinstance(v, torch.Tensor):
             target_dtype = dtype if v.dtype == torch.float32 else v.dtype
@@ -31,7 +36,7 @@ def to_device(x, device: Union[torch.device, int], dtype: Optional[torch.dtype] 
         elif isinstance(v, dict):
             x[k] = to_device(v, device, dtype=dtype)
         elif v is not None and raise_on_unexpected:
-            raise ValueError(f'Unknown type, {type(v)}')
+            raise ValueError(f"Unknown type, {type(v)}")
     return x
 
 
@@ -54,35 +59,49 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         classification_type: classification type that was used in the specified model
             - cross-entropy - class likelihood prediction using cross entropy loss during training
             - clustering - class prediction using similarity between context and query vectors
-            - clustering-cosine - class prediction using cosine similarity between context and query vectors 
+            - clustering-cosine - class prediction using cosine similarity between context and query vectors
         drop_constant_columns: flag to indicate to drop constant columns in the input dataframe
         test_chunk_size: Batch size of test rows to use for prediction at once
     """
+
     classification_or_regression: str
     MAX_AUTO_BAGS = 16
     MAX_NUM_COLUMNS = 500
 
-    def __init__(self,
-                 checkpoint: str = '2025-11-04_sap-rpt-one-oss.pt',
-                 bagging: Union[Literal['auto'], int] = 8,
-                 max_context_size: int = 8192,
-                 drop_constant_columns: bool = True,
-                 test_chunk_size: int = 1000):
+    def __init__(
+        self,
+        checkpoint: str = "2025-11-04_sap-rpt-one-oss.pt",
+        bagging: Union[Literal["auto"], int] = 8,
+        max_context_size: int = 8192,
+        drop_constant_columns: bool = True,
+        test_chunk_size: int = 1000,
+        is_valid: bool = True,
+    ):
 
         self.model_size = ModelSize.base
         self.checkpoint = checkpoint
         self.regression_type = "l2"
         self.classification_type = "cross-entropy"
         self.test_chunk_size = test_chunk_size
-        self._checkpoint_path = hf_hub_download(repo_id="SAP/sap-rpt-1-oss", filename=checkpoint)
+        checkpoint_path = Path(checkpoint).expanduser()
+        if checkpoint_path.exists():
+            self._checkpoint_path = str(checkpoint_path.resolve())
+        else:
+            self._checkpoint_path = hf_hub_download(
+                repo_id="SAP/sap-rpt-1-oss", filename=checkpoint
+            )
         self.bagging = bagging
-        if not isinstance(bagging, int) and bagging != 'auto':
+        if not isinstance(bagging, int) and bagging != "auto":
             raise ValueError('bagging must be an integer or "auto"')
         self.max_context_size = max_context_size
         self.num_regression_bins = 16
-        self.model = RPT(self.model_size, regression_type=self.regression_type, classification_type=self.classification_type)
+        self.model = RPT(
+            self.model_size,
+            regression_type=self.regression_type,
+            classification_type=self.classification_type,
+        )
         # We're using a single GPU here, even if more are available
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if torch.cuda.is_available():
             if torch.cuda.get_device_capability(0)[0] >= 8:
                 self.dtype = torch.bfloat16
@@ -100,7 +119,8 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
             classification_type=self.classification_type,
             random_seed=self.seed,
             num_regression_bins=self.num_regression_bins,
-            is_valid=True)
+            is_valid=is_valid,
+        )
         self.model.to(self.device).eval()
 
     @abstractmethod
@@ -115,11 +135,11 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
             y: The target column.
         """
         if len(X) != len(y):
-            raise ValueError('X and y must have the same length')
+            raise ValueError("X and y must have the same length")
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
         if not isinstance(y, pd.Series):
-            y = pd.Series(y, name='TARGET')
+            y = pd.Series(y, name="TARGET")
 
         self.X_ = X
 
@@ -135,7 +155,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
     @property
     def bagging_number(self):
         check_is_fitted(self)
-        if self.bagging_config == 'auto':
+        if self.bagging_config == "auto":
             return min(self.MAX_AUTO_BAGS, ceil(len(self.X_) / self.max_context_size))
         else:
             assert isinstance(self.bagging_config, int)
@@ -147,23 +167,33 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
 
         if not isinstance(X_test, pd.DataFrame):
             X_test = pd.DataFrame(X_test, columns=X_train.columns)
-        y_test = pd.Series([y_train.iloc[0]] * len(X_test), name=self.y_.name, index=X_test.index)
+        y_test = pd.Series(
+            [y_train.iloc[0]] * len(X_test), name=self.y_.name, index=X_test.index
+        )
 
         df_train = pd.concat([X_train, y_train.to_frame()], axis=1)
         df_test = pd.concat([X_test, y_test.to_frame()], axis=1)
 
         if isinstance(self.bagging_config, int) and self.bagging_config > 1:
             # For bagging, we use replacement
-            df_train = df_train.sample(self.max_context_size, replace=False, random_state=self.seed + bagging_index)
+            df_train = df_train.sample(
+                self.max_context_size,
+                replace=False,
+                random_state=self.seed + bagging_index,
+            )
         elif len(df_train) > self.max_context_size:
             if isinstance(self.bagging_config, str):
-                assert self.bagging_config == 'auto'
+                assert self.bagging_config == "auto"
                 # Split the data into overlapping chunks of size max_context_size
                 # Randomize order as well, to have balanced bags
                 # bagging_index = 0 --> select 0:max_context_size
                 # ... (linearly spaced like np.linspace(0, len(df_train) - max_context_size, self.bagging_number))
                 # bagging_index = self.bagging_number - 1 --> select (len(df_train) - max_context_size):len(df_train)
-                start = int((len(df_train) - self.max_context_size) / (self.bagging_number - 1) * bagging_index)
+                start = int(
+                    (len(df_train) - self.max_context_size)
+                    / (self.bagging_number - 1)
+                    * bagging_index
+                )
                 # We need a fixed seed, so across diffent "bagging folds" we select the correct indices
                 # (as non-overlapping as possible)
                 np.random.seed(self.seed)
@@ -172,7 +202,11 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
                 df_train = df_train.loc[indices[start:end]]
             else:
                 # There is no bagging, but we still have to sample because there are too many points
-                df_train = df_train.sample(self.max_context_size, replace=False, random_state=self.seed + bagging_index)
+                df_train = df_train.sample(
+                    self.max_context_size,
+                    replace=False,
+                    random_state=self.seed + bagging_index,
+                )
 
         df = pd.concat([df_train, df_test], ignore_index=True)
 
@@ -187,33 +221,41 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         if df.shape[1] > self.MAX_NUM_COLUMNS:
             X = df.iloc[:, :-1]
             y = df.iloc[:, -1:]
-            X = X.sample(n=self.MAX_NUM_COLUMNS - 1, axis=1, random_state=self.seed + bagging_index, replace=False)
+            X = X.sample(
+                n=self.MAX_NUM_COLUMNS - 1,
+                axis=1,
+                random_state=self.seed + bagging_index,
+                replace=False,
+            )
             df = pd.concat([X, y], axis=1)
 
-        df_train = df.iloc[:len(df_train)]
-        df_test = df.iloc[len(df_train):]
+        df_train = df.iloc[: len(df_train)]
+        df_test = df.iloc[len(df_train) :]
         X_train = df_train.iloc[:, :-1]
         y_train = df_train.iloc[:, -1:]
         X_test = df_test.iloc[:, :-1]
         y_test = df_test.iloc[:, -1:]
 
-        data, labels, label_classes = self.tokenizer(X_train, y_train, X_test, y_test,
-                                                     self.classification_or_regression)
+        data, labels, label_classes = self.tokenizer(
+            X_train, y_train, X_test, y_test, self.classification_or_regression
+        )
 
         target_mean, target_std = 0, 0
-        is_regression = self.classification_or_regression == 'regression'
-        if is_regression and self.regression_type == 'l2':
-            _, target_mean, target_std = self.tokenizer.standard_scale_column(y_train, y_test)
+        is_regression = self.classification_or_regression == "regression"
+        if is_regression and self.regression_type == "l2":
+            _, target_mean, target_std = self.tokenizer.standard_scale_column(
+                y_train, y_test
+            )
 
         return {
-            'data': data,
-            'num_rows': df.shape[0],
-            'num_cols': df.shape[1],
-            'labels': None,
-            'is_regression': torch.tensor(is_regression),
-            'label_classes': np.asarray(label_classes),
-            'target_mean': target_mean,
-            'target_std': target_std
+            "data": data,
+            "num_rows": df.shape[0],
+            "num_cols": df.shape[1],
+            "labels": None,
+            "is_regression": torch.tensor(is_regression),
+            "label_classes": np.asarray(label_classes),
+            "target_mean": target_mean,
+            "target_std": target_std,
         }
 
     @abstractmethod
@@ -222,7 +264,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
 
 
 class SAP_RPT_OSS_Classifier(ClassifierMixin, SAP_RPT_OSS_Estimator):
-    classification_or_regression = 'classification'
+    classification_or_regression = "classification"
 
     def task_specific_fit(self):
         # Store the classes seen during fit
@@ -231,11 +273,13 @@ class SAP_RPT_OSS_Classifier(ClassifierMixin, SAP_RPT_OSS_Estimator):
     def reorder_logits(self, logits, tokenized_classes):
         class_mapping = {cls: idx for idx, cls in enumerate(self.classes_)}
         indices = np.array([class_mapping[cls] for cls in tokenized_classes])
-        new_logits = torch.full((logits.shape[0], len(self.classes_)),
-                                float('-inf'),
-                                dtype=logits.dtype,
-                                device=logits.device)
-        new_logits[:, indices] = logits[:, :len(tokenized_classes)]
+        new_logits = torch.full(
+            (logits.shape[0], len(self.classes_)),
+            float("-inf"),
+            dtype=logits.dtype,
+            device=logits.device,
+        )
+        new_logits[:, indices] = logits[:, : len(tokenized_classes)]
         return new_logits
 
     @torch.no_grad()
@@ -249,19 +293,31 @@ class SAP_RPT_OSS_Classifier(ClassifierMixin, SAP_RPT_OSS_Estimator):
             tokenized_data = self.get_tokenized_data(X.copy(), bagging_index)
 
             try:
-                tokenized_data = to_device(tokenized_data, self.device, raise_on_unexpected=False, dtype=self.dtype)
+                tokenized_data = to_device(
+                    tokenized_data,
+                    self.device,
+                    raise_on_unexpected=False,
+                    dtype=self.dtype,
+                )
             except TypeError:
                 # Legacy compatibility
-                tokenized_data = to_device(tokenized_data, self.device, raise_on_unexpected=False)
+                tokenized_data = to_device(
+                    tokenized_data, self.device, raise_on_unexpected=False
+                )
             logits_classif = self.model(**tokenized_data)
 
-            _, logits = self.model.extract_prediction_classification(logits_classif, tokenized_data['data']['target'],
-                                                                     tokenized_data['label_classes'])
+            _, logits = self.model.extract_prediction_classification(
+                logits_classif,
+                tokenized_data["data"]["target"],
+                tokenized_data["label_classes"],
+            )
 
-            all_logits.append(self.reorder_logits(logits, tokenized_data['label_classes']))
+            all_logits.append(
+                self.reorder_logits(logits, tokenized_data["label_classes"])
+            )
 
         all_logits = torch.stack(all_logits)
-        if self.classification_type in ['clustering', 'clustering-cosine']:
+        if self.classification_type in ["clustering", "clustering-cosine"]:
             # Pick the class of the most similar element across folds, then softmax
             all_logits = torch.max(all_logits, dim=0).values.cpu().float()
             probs = torch.nn.functional.softmax(all_logits, dim=-1)
@@ -316,7 +372,7 @@ class SAP_RPT_OSS_Classifier(ClassifierMixin, SAP_RPT_OSS_Estimator):
 
 
 class SAP_RPT_OSS_Regressor(RegressorMixin, SAP_RPT_OSS_Estimator):
-    classification_or_regression = 'regression'
+    classification_or_regression = "regression"
 
     def task_specific_fit(self):
         self.y_ = self.y_.astype(float)
@@ -338,19 +394,25 @@ class SAP_RPT_OSS_Regressor(RegressorMixin, SAP_RPT_OSS_Estimator):
 
         for bagging_index in range(self.bagging_number):
             tokenized_data = self.get_tokenized_data(X.copy(), bagging_index)
-            tokenized_data = to_device(tokenized_data, self.device, raise_on_unexpected=False)
+            tokenized_data = to_device(
+                tokenized_data, self.device, raise_on_unexpected=False
+            )
             logits_reg = self.model(**tokenized_data)
-            label_classes = tokenized_data['label_classes']
+            label_classes = tokenized_data["label_classes"]
 
-            if self.regression_type != 'l2':
+            if self.regression_type != "l2":
                 if len(label_classes) != self.num_regression_bins:
-                    raise ValueError(f'Expected {self.num_regression_bins} classes, got {len(label_classes)}')
+                    raise ValueError(
+                        f"Expected {self.num_regression_bins} classes, got {len(label_classes)}"
+                    )
 
-            preds, _ = self.model.extract_prediction_regression(logits_reg,
-                                                                tokenized_data['data']['target'],
-                                                                tokenized_data['label_classes'],
-                                                                target_mean=tokenized_data.get('target_mean'),
-                                                                target_std=tokenized_data.get('target_std'))
+            preds, _ = self.model.extract_prediction_regression(
+                logits_reg,
+                tokenized_data["data"]["target"],
+                tokenized_data["label_classes"],
+                target_mean=tokenized_data.get("target_mean"),
+                target_std=tokenized_data.get("target_std"),
+            )
             all_preds.append(preds)
 
         preds = np.mean(all_preds, axis=0)
