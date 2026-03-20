@@ -5,15 +5,14 @@
 import argparse
 from enum import Enum
 
-
-
 embedding_model_to_dimension_and_pooling = {
-    'sentence-transformers/all-MiniLM-L6-v2': (384, 'mean'),
-    'intfloat/multilingual-e5-small': (384, 'mean'),
-    'Alibaba-NLP/gte-multilingual-base': (768, 'cls'),
+    "sentence-transformers/all-MiniLM-L6-v2": (384, "mean"),
+    "intfloat/multilingual-e5-small": (384, "mean"),
+    "Alibaba-NLP/gte-multilingual-base": (768, "cls"),
 }
 
 QUANTILE_DIMENSION_DEFAULT = 64
+
 
 class ModelSize(Enum):
     # The two values are the number of layers and the hidden size
@@ -27,9 +26,10 @@ class ModelSize(Enum):
 
 
 class ModelSizeAction(argparse.Action):
-
     def __call__(self, parser, namespace, values, option_string=None):
         if values not in ModelSize.__members__ or not isinstance(values, str):
-            raise ValueError(f'{values} is not a valid value for ModelSize: {ModelSize.__members__.keys()}')
+            raise ValueError(
+                f"{values} is not a valid value for ModelSize: {ModelSize.__members__.keys()}"
+            )
         value = ModelSize[values]
         setattr(namespace, self.dest, value)

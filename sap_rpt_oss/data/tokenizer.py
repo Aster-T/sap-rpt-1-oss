@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import datetime
+import os
 from typing import Collection, Literal, Union
 
 import numpy as np
@@ -12,31 +12,42 @@ import pyarrow
 import torch
 from sklearn.preprocessing import StandardScaler
 
-from sap_rpt_oss.constants import QUANTILE_DIMENSION_DEFAULT, embedding_model_to_dimension_and_pooling
+from sap_rpt_oss.constants import (
+    QUANTILE_DIMENSION_DEFAULT,
+    embedding_model_to_dimension_and_pooling,
+)
 from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
 from sap_rpt_oss.utils.lru_cache import LRU_Cache
 
 
 class Tokenizer:
     QUANTILE_DIMENSION = QUANTILE_DIMENSION_DEFAULT
-    sentence_embedding_model_name = 'sentence-transformers/all-MiniLM-L6-v2'
-    embedding_dim = embedding_model_to_dimension_and_pooling[sentence_embedding_model_name][0]
+    sentence_embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dim = embedding_model_to_dimension_and_pooling[
+        sentence_embedding_model_name
+    ][0]
 
-    def __init__(self,
-                 regression_type: Literal['reg-as-classif', 'l2'] = 'reg-as-classif',
-                 classification_type: Literal['cross-entropy', 'clustering', 'clustering-cosine'] = 'cross-entropy',
-                 num_regression_bins=16,
-                 random_seed=None,
-                 is_valid=False):
+    def __init__(
+        self,
+        regression_type: Literal["reg-as-classif", "l2"] = "reg-as-classif",
+        classification_type: Literal[
+            "cross-entropy", "clustering", "clustering-cosine"
+        ] = "cross-entropy",
+        num_regression_bins=16,
+        random_seed=None,
+        is_valid=False,
+    ):
         self.regression_type = regression_type
         self.classification_type = classification_type
         self.random_seed = random_seed
         self.num_regression_bins = num_regression_bins
         self.is_valid = is_valid
 
-        self.sentence_embedder = SentenceEmbedder(self.sentence_embedding_model_name,
-                                                  device='cuda' if torch.cuda.is_available() else 'cpu')
-        self.cache = LRU_Cache(max_size=int(os.getenv('LRU_CACHE_SIZE', 1_000_000)))
+        self.sentence_embedder = SentenceEmbedder(
+            self.sentence_embedding_model_name,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
+        self.cache = LRU_Cache(max_size=int(os.getenv("LRU_CACHE_SIZE", 1_000_000)))
 
     def texts_to_tensor(self, texts: Collection[str]) -> torch.Tensor:
         if len(texts) == 0:
@@ -121,7 +132,9 @@ class Tokenizer:
         b = np.concatenate([a, y_query.values.flatten()])
         num_bins = self.num_regression_bins
 
-        q = np.linspace(1 / (2 * num_bins), (2 * num_bins - 1) / (2 * num_bins), num_bins)
+        q = np.linspace(
+            1 / (2 * num_bins), (2 * num_bins - 1) / (2 * num_bins), num_bins
+        )
         quantiles = np.quantile(a, q)
         extended_quantiles = np.concatenate(([np.min(a)], quantiles, [np.max(a)]))
 
@@ -143,7 +156,9 @@ class Tokenizer:
 
         return lower_bound_index, delta, bin_index, quantiles
 
-    def build_labels(self, y_context: pd.DataFrame, y_query: pd.DataFrame, is_clustering=False):
+    def build_labels(
+        self, y_context: pd.DataFrame, y_query: pd.DataFrame, is_clustering=False
+    ):
         """
         A bit like OrdinalEncoder fit on train, but for test, if we find an unseen label,
         instead of raising a ValueError, we assign an integer larger than the largest seen label.
@@ -154,7 +169,9 @@ class Tokenizer:
         # get most frequent `self.QUANTILE_DIMENSION - 2` labels and their counts
 
         if is_clustering is False:
-            sorted_value_to_count = sorted_value_to_count.iloc[:self.QUANTILE_DIMENSION - 2]
+            sorted_value_to_count = sorted_value_to_count.iloc[
+                : self.QUANTILE_DIMENSION - 2
+            ]
 
         if self.random_seed is not None:
             np.random.seed(self.random_seed)
@@ -168,107 +185,149 @@ class Tokenizer:
         labels_idx = np.arange(0, len(label_classes))
         label_to_index = {l: idx for l, idx in zip(label_classes, labels_idx)}
         y_concat = pd.concat([y_context, y_query]).values.flatten()
-        result = np.asarray([label_to_index.get(y, self.QUANTILE_DIMENSION - 2) for y in y_concat])
+        result = np.asarray(
+            [label_to_index.get(y, self.QUANTILE_DIMENSION - 2) for y in y_concat]
+        )
         return result, np.asarray(label_classes)
 
     @staticmethod
     def time_to_seconds(t: Union[datetime.time, pyarrow.time64]):
         try:
             return t.hour * 3600 + t.minute * 60 + t.second + t.microsecond * 1e-6
-        except Exception as e:
-            print('Expected time found', type(t), t)
+        except Exception:
+            print("Expected time found", type(t), t)
             return np.nan
 
-    def convert_type_(self, context_df: pd.DataFrame, query_df: pd.DataFrame, column_name: str):
+    def convert_type_(
+        self, context_df: pd.DataFrame, query_df: pd.DataFrame, column_name: str
+    ):
         dt = str(context_df[column_name].dtype)
-        if dt.startswith('time64') or (dt == 'object' and isinstance(context_df[column_name].iloc[0], datetime.time)):
+        if dt.startswith("time64") or (
+            dt == "object"
+            and isinstance(context_df[column_name].iloc[0], datetime.time)
+        ):
             # time type; either pyarrow.time64[us] (whole column dtype) or datetime.time (column is object)
-            context_df[column_name] = context_df[column_name].apply(self.time_to_seconds)
+            context_df[column_name] = context_df[column_name].apply(
+                self.time_to_seconds
+            )
             query_df[column_name] = query_df[column_name].apply(self.time_to_seconds)
-            dt = 'float64'
-        elif dt.startswith('date') or dt.startswith('timestamp') or (dt == 'object' and isinstance(
-                context_df[column_name].iloc[0], datetime.date)):
+            dt = "float64"
+        elif (
+            dt.startswith("date")
+            or dt.startswith("timestamp")
+            or (
+                dt == "object"
+                and isinstance(context_df[column_name].iloc[0], datetime.date)
+            )
+        ):
             # date type; either pyarrow.date32[day] (whole column dtype) or datetime.date (column is object)
-            context_df[column_name] = pd.to_datetime(context_df[column_name], errors='coerce')
-            query_df[column_name] = pd.to_datetime(query_df[column_name], errors='coerce')
-            dt = 'datetime64[ns]'
-        elif dt.split('[')[0] not in {
-                'int64',
-                'int32',
-                'int16',
-                'int8',
-                'uint64',
-                'uint32',
-                'uint16',
-                'uint8',
-                'float64',
-                'float32',
-                'float16',
-                'datetime64',
-                'double',
-                'date32',
-                'timestamp',
+            context_df[column_name] = pd.to_datetime(
+                context_df[column_name], errors="coerce"
+            )
+            query_df[column_name] = pd.to_datetime(
+                query_df[column_name], errors="coerce"
+            )
+            dt = "datetime64[ns]"
+        elif dt.split("[")[0] not in {
+            "int64",
+            "int32",
+            "int16",
+            "int8",
+            "uint64",
+            "uint32",
+            "uint16",
+            "uint8",
+            "float64",
+            "float32",
+            "float16",
+            "datetime64",
+            "double",
+            "date32",
+            "timestamp",
         }:
-            if dt not in ['bool', 'string[pyarrow]', 'bool[pyarrow]', 'category', 'string', 'object']:
-                print(f'Data type {dt} not recognized! Defaulting to string')
-            elif dt == 'object' and not isinstance(context_df[column_name].iloc[0], str):
+            if dt not in [
+                "bool",
+                "string[pyarrow]",
+                "bool[pyarrow]",
+                "category",
+                "string",
+                "object",
+            ]:
+                print(f"Data type {dt} not recognized! Defaulting to string")
+            elif dt == "object" and not isinstance(
+                context_df[column_name].iloc[0], str
+            ):
                 is_null = context_df[column_name].isnull()
                 if not is_null.iloc[0]:
                     value = context_df[column_name].iloc[0]
                 elif is_null.all():
-                    print('Warning, all column is null!')
-                    value = 'skip_other_warning'
+                    print("Warning, all column is null!")
+                    value = "skip_other_warning"
                 else:
                     value = context_df[column_name][~is_null].iloc[0]
                 if not isinstance(value, str):
-                    print(f'Warning, dtype is object, but first non-null value is {type(value)}. Converting to str.')
-            dt = 'object'
+                    print(
+                        f"Warning, dtype is object, but first non-null value is {type(value)}. Converting to str."
+                    )
+            dt = "object"
         return dt
 
     def process_target(self, data, y_context, y_query, classification_or_regression):
-        data['target_delta'] = torch.zeros(len(y_context) + len(y_query), dtype=torch.float32)
-        if classification_or_regression == 'regression':
+        data["target_delta"] = torch.zeros(
+            len(y_context) + len(y_query), dtype=torch.float32
+        )
+        if classification_or_regression == "regression":
             y_context = y_context.astype(float)
             y_query = y_query.astype(float)
 
             # Here it's numeric, so we also need to quantize it
-            if self.regression_type != 'l2':
-                labels_lower_bin, delta_labels, labels, label_classes = self.quantize_column(y_context, y_query)
-                data['target'] = torch.tensor(labels_lower_bin)
+            if self.regression_type != "l2":
+                labels_lower_bin, delta_labels, labels, label_classes = (
+                    self.quantize_column(y_context, y_query)
+                )
+                data["target"] = torch.tensor(labels_lower_bin)
                 # For regression ('reg-as-classif'), we also need the delta,
                 # a float in [0, 1]; morally, the "real" target is data['target'] + data['delta']
-                data['target_delta'] = torch.tensor(delta_labels, dtype=torch.float32)
+                data["target_delta"] = torch.tensor(delta_labels, dtype=torch.float32)
             else:
                 label_classes = np.zeros(self.QUANTILE_DIMENSION - 2)
 
-            if self.regression_type == 'l2':
+            if self.regression_type == "l2":
                 labels, _, _ = self.standard_scale_column(y_context, y_query)
-                data['target'] = torch.tensor(labels)
+                data["target"] = torch.tensor(labels)
         else:
-            is_clustering = 'clustering' in self.classification_type
-            labels_lower_bin, label_classes = self.build_labels(y_context, y_query, is_clustering=is_clustering)
+            is_clustering = "clustering" in self.classification_type
+            labels_lower_bin, label_classes = self.build_labels(
+                y_context, y_query, is_clustering=is_clustering
+            )
             labels = labels_lower_bin
-            data['target'] = torch.tensor(labels_lower_bin)
+            data["target"] = torch.tensor(labels_lower_bin)
             # by default save text embeddings for the target column, inside the model we clear it
             texts = pd.concat([y_context, y_query]).iloc[:, -1]
-            data['text_embeddings'][:, -1] = self.texts_to_tensor(texts.astype(str))
+            data["text_embeddings"][:, -1] = self.texts_to_tensor(texts.astype(str))
             # It could happen that multiple classes have the same embedding, for example if they
             # are only distinguished by casing and our text embedding model is case-insensitive,
             # or maybe if one class is 0 (int) and one is "0" (string) -
             # well, let's hope that doesn't happen, but who knows.
             # In that case, add a prefix to classes and embed again
             unique_classes, unique_indices = np.unique(texts, return_index=True)
-            should_be_unique_embeddings = data['text_embeddings'][:, -1].numpy()[unique_indices]
+            should_be_unique_embeddings = data["text_embeddings"][:, -1].numpy()[
+                unique_indices
+            ]
             unique_label_embeddings = np.unique(should_be_unique_embeddings, axis=0)
             if len(unique_label_embeddings) < len(unique_classes):
-                remapped_unique_classes = {c: f'{i}_{c}' for i, c in enumerate(unique_classes)}
+                remapped_unique_classes = {
+                    c: f"{i}_{c}" for i, c in enumerate(unique_classes)
+                }
                 modified_column = texts.apply(remapped_unique_classes.get)
-                data['text_embeddings'][:, -1] = self.texts_to_tensor(modified_column.astype(str))
+                data["text_embeddings"][:, -1] = self.texts_to_tensor(
+                    modified_column.astype(str)
+                )
 
         context_size = len(y_context)
-        data['text_embeddings'][context_size:, -1] = 0
-        data['target'][context_size:] = -100
-        data['target_delta'][context_size:] = 0.0
+        data["text_embeddings"][context_size:, -1] = 0
+        data["target"][context_size:] = -100
+        data["target_delta"][context_size:] = 0.0
         return data, labels, label_classes
 
     def replace_inf_values(self, column_values: pd.Series):
@@ -287,17 +346,25 @@ class Tokenizer:
             str_dtype = self.convert_type_(X_context, X_query, c)
             column_values = pd.concat([X_context[c], X_query[c]])
 
-            if str_dtype == 'object':
-                data['text_embeddings'][:, column_index] = self.texts_to_tensor(column_values.astype(str))
-            elif str_dtype.split('[')[0] in ['datetime64', 'date32', 'timestamp']:
-                data['date_year_month_day_weekday'][:, column_index, 0] = \
-                    self.value_or_nan(column_values.dt.year.clip(2000, 2050) - 2000).int()
-                data['date_year_month_day_weekday'][:, column_index, 1] = \
+            if str_dtype == "object":
+                data["text_embeddings"][:, column_index] = self.texts_to_tensor(
+                    column_values.astype(str)
+                )
+            elif str_dtype.split("[")[0] in ["datetime64", "date32", "timestamp"]:
+                data["date_year_month_day_weekday"][:, column_index, 0] = (
+                    self.value_or_nan(
+                        column_values.dt.year.clip(2000, 2050) - 2000
+                    ).int()
+                )
+                data["date_year_month_day_weekday"][:, column_index, 1] = (
                     self.value_or_nan(column_values.dt.month - 1).int()
-                data['date_year_month_day_weekday'][:, column_index, 2] = \
+                )
+                data["date_year_month_day_weekday"][:, column_index, 2] = (
                     self.value_or_nan(column_values.dt.day - 1).int()
-                data['date_year_month_day_weekday'][:, column_index, 3] = \
+                )
+                data["date_year_month_day_weekday"][:, column_index, 3] = (
                     self.value_or_nan(column_values.dt.weekday).int()
+                )
             else:
                 # Switch to float, potentially away from arrow types?
                 # Probably not needed.
@@ -305,15 +372,18 @@ class Tokenizer:
                 context_values = X_context[c].astype(float)
                 query_values = X_query[c].astype(float)
 
-                if self.regression_type == 'l2':
+                if self.regression_type == "l2":
                     context_values = context_values.replace([np.inf, -np.inf], np.nan)
                     query_values = query_values.replace([np.inf, -np.inf], np.nan)
                     col_mean_value = context_values.mean()
                     context_values = context_values.fillna(value=col_mean_value)
                     query_values = query_values.fillna(value=col_mean_value)
-                    col_values_normalized, _, _ = self.standard_scale_column(context_values.to_frame(),
-                                                                             query_values.to_frame())
-                    data['number_normalized'][:, column_index] = torch.tensor(col_values_normalized)
+                    col_values_normalized, _, _ = self.standard_scale_column(
+                        context_values.to_frame(), query_values.to_frame()
+                    )
+                    data["number_normalized"][:, column_index] = torch.tensor(
+                        col_values_normalized
+                    )
                 else:
                     column_labels_lower_bin = np.zeros(total_length, dtype=int)
                     column_delta_labels = np.zeros(total_length, dtype=float)
@@ -321,45 +391,72 @@ class Tokenizer:
                     # Since exact values don't matter, we just replace inf with max+1 and -inf with min-1.
                     context_values = self.replace_inf_values(context_values)
                     query_values = self.replace_inf_values(query_values)
-                    nan_mask = pd.concat([context_values.isnull(), query_values.isnull()]).values
-                    column_labels_lower_bin[~nan_mask], column_delta_labels[~nan_mask], _, _ = \
-                        self.quantize_column(context_values.dropna().to_frame(), query_values.dropna().to_frame())
+                    nan_mask = pd.concat(
+                        [context_values.isnull(), query_values.isnull()]
+                    ).values
+                    (
+                        column_labels_lower_bin[~nan_mask],
+                        column_delta_labels[~nan_mask],
+                        _,
+                        _,
+                    ) = self.quantize_column(
+                        context_values.dropna().to_frame(),
+                        query_values.dropna().to_frame(),
+                    )
                     # assign nan value to the last bin `QUANTILE_DIMENSION - 1`
                     column_labels_lower_bin[nan_mask] = self.QUANTILE_DIMENSION - 1
-                    data['number_percentile_floor'][:, column_index] = torch.tensor(column_labels_lower_bin)
-                    data['number_percentile_delta'][:, column_index] = torch.tensor(column_delta_labels)
+                    data["number_percentile_floor"][:, column_index] = torch.tensor(
+                        column_labels_lower_bin
+                    )
+                    data["number_percentile_delta"][:, column_index] = torch.tensor(
+                        column_delta_labels
+                    )
         return data
 
-    def __call__(self, X_context: pd.DataFrame, y_context: pd.DataFrame, X_query: pd.DataFrame, y_query: pd.DataFrame,
-                 classification_or_regression):
+    def __call__(
+        self,
+        X_context: pd.DataFrame,
+        y_context: pd.DataFrame,
+        X_query: pd.DataFrame,
+        y_query: pd.DataFrame,
+        classification_or_regression,
+    ):
 
         # Drop columns that are entirely null in the training indices
         # (for numeric columns, it causes a crash; for categorical ones, it might work, but it's likely not worth it)
-        X_context = X_context.dropna(axis=1, how='all').copy()
+        X_context = X_context.dropna(axis=1, how="all").copy()
         X_query = X_query[X_context.columns].copy()
 
         total_length = len(X_context) + len(X_query)
         num_columns = len(X_context.columns) + 1  # Add one for the target column
 
         data = {
-            'column_embeddings':
-                self.texts_to_tensor([str(x) for x in X_context.columns] + [str(y_context.columns[0])]),
-            'text_embeddings':
-                torch.zeros((total_length, num_columns, self.embedding_dim), dtype=torch.float16),
-            'date_year_month_day_weekday':
-                torch.zeros((total_length, num_columns, 4), dtype=torch.int64),
-            'target':
-                torch.zeros(total_length, dtype=torch.float32)
+            "column_embeddings": self.texts_to_tensor(
+                [str(x) for x in X_context.columns] + [str(y_context.columns[0])]
+            ),
+            "text_embeddings": torch.zeros(
+                (total_length, num_columns, self.embedding_dim), dtype=torch.float16
+            ),
+            "date_year_month_day_weekday": torch.zeros(
+                (total_length, num_columns, 4), dtype=torch.int64
+            ),
+            "target": torch.zeros(total_length, dtype=torch.float32),
         }
-        if self.regression_type == 'l2':
-            data['number_normalized'] = torch.full((total_length, num_columns), dtype=torch.float32, fill_value=-100)
+        if self.regression_type == "l2":
+            data["number_normalized"] = torch.full(
+                (total_length, num_columns), dtype=torch.float32, fill_value=-100
+            )
         else:
-            data['number_percentile_floor'] = torch.full((total_length, num_columns),
-                                                         dtype=torch.int64,
-                                                         fill_value=-100)
-            data['number_percentile_delta'] = torch.zeros((total_length, num_columns), dtype=torch.float32)
+            data["number_percentile_floor"] = torch.full(
+                (total_length, num_columns), dtype=torch.int64, fill_value=-100
+            )
+            data["number_percentile_delta"] = torch.zeros(
+                (total_length, num_columns), dtype=torch.float32
+            )
 
-        data, labels, label_classes = self.process_target(data, y_context, y_query, classification_or_regression)
+        data, labels, label_classes = self.process_target(
+            data, y_context, y_query, classification_or_regression
+        )
         data = self.process_features(X_context, X_query, data)
 
         return data, torch.tensor(labels), label_classes

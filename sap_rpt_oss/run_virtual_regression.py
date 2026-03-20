@@ -14,11 +14,12 @@ from sklearn.model_selection import train_test_split
 
 from sap_rpt_oss import SAP_RPT_OSS_Regressor
 
-
 TARGET_COLUMN = "TARGET"
 
 
-def build_virtual_regression_dataframe(num_rows: int = 3000, seed: int = 42) -> pd.DataFrame:
+def build_virtual_regression_dataframe(
+    num_rows: int = 3000, seed: int = 42
+) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
 
     regions = np.array(["north", "south", "east", "west", "central"])
@@ -29,25 +30,39 @@ def build_virtual_regression_dataframe(num_rows: int = 3000, seed: int = 42) -> 
 
     df = pd.DataFrame(
         {
-            "region": rng.choice(regions, size=num_rows, p=[0.23, 0.18, 0.21, 0.16, 0.22]),
-            "product_line": rng.choice(product_lines, size=num_rows, p=[0.29, 0.24, 0.27, 0.20]),
+            "region": rng.choice(
+                regions, size=num_rows, p=[0.23, 0.18, 0.21, 0.16, 0.22]
+            ),
+            "product_line": rng.choice(
+                product_lines, size=num_rows, p=[0.29, 0.24, 0.27, 0.20]
+            ),
             "channel": rng.choice(channels, size=num_rows, p=[0.52, 0.26, 0.22]),
-            "contract_type": rng.choice(contract_types, size=num_rows, p=[0.55, 0.33, 0.12]),
-            "customer_cohort": rng.choice(cohorts, size=num_rows, p=[0.28, 0.34, 0.25, 0.13]),
+            "contract_type": rng.choice(
+                contract_types, size=num_rows, p=[0.55, 0.33, 0.12]
+            ),
+            "customer_cohort": rng.choice(
+                cohorts, size=num_rows, p=[0.28, 0.34, 0.25, 0.13]
+            ),
             "is_enterprise": rng.choice([False, True], size=num_rows, p=[0.78, 0.22]),
             "tenure_days": rng.integers(45, 2200, size=num_rows),
             "monthly_usage": rng.gamma(shape=4.5, scale=11.0, size=num_rows),
             "support_tickets": rng.poisson(lam=2.4, size=num_rows),
             "discount_rate": rng.uniform(0.0, 0.35, size=num_rows),
-            "base_price": rng.normal(loc=180.0, scale=35.0, size=num_rows).clip(65.0, 420.0),
-            "satisfaction_score": rng.normal(loc=74.0, scale=11.5, size=num_rows).clip(25.0, 100.0),
+            "base_price": rng.normal(loc=180.0, scale=35.0, size=num_rows).clip(
+                65.0, 420.0
+            ),
+            "satisfaction_score": rng.normal(loc=74.0, scale=11.5, size=num_rows).clip(
+                25.0, 100.0
+            ),
             "num_integrations": rng.integers(0, 15, size=num_rows),
             "renewal_risk_score": rng.uniform(0.0, 1.0, size=num_rows),
         }
     )
 
     signup_offset_days = rng.integers(0, 365 * 4, size=num_rows)
-    df["signup_date"] = pd.Timestamp("2020-01-01") + pd.to_timedelta(signup_offset_days, unit="D")
+    df["signup_date"] = pd.Timestamp("2020-01-01") + pd.to_timedelta(
+        signup_offset_days, unit="D"
+    )
 
     region_effect = {
         "north": 16.0,
@@ -59,13 +74,32 @@ def build_virtual_regression_dataframe(num_rows: int = 3000, seed: int = 42) -> 
     product_effect = {"alpha": 18.0, "beta": -7.5, "gamma": 12.0, "delta": -3.5}
     channel_effect = {"online": 8.0, "partner": -6.0, "field": 13.0}
     contract_effect = {"monthly": -9.0, "annual": 15.0, "two_year": 27.0}
-    cohort_effect = {"startup": -12.0, "growth": 4.0, "mid_market": 11.0, "enterprise": 22.0}
+    cohort_effect = {
+        "startup": -12.0,
+        "growth": 4.0,
+        "mid_market": 11.0,
+        "enterprise": 22.0,
+    }
 
-    seasonal_signal = np.sin((df["signup_date"].dt.dayofyear.to_numpy() / 365.0) * 2.0 * np.pi)
-    annual_bonus = (df["contract_type"] == "annual").to_numpy(dtype=float) * 11.0 * np.log1p(df["monthly_usage"])
-    partner_penalty = (df["channel"] == "partner").to_numpy(dtype=float) * np.sqrt(df["support_tickets"] + 1.0) * 6.5
+    seasonal_signal = np.sin(
+        (df["signup_date"].dt.dayofyear.to_numpy() / 365.0) * 2.0 * np.pi
+    )
+    annual_bonus = (
+        (df["contract_type"] == "annual").to_numpy(dtype=float)
+        * 11.0
+        * np.log1p(df["monthly_usage"])
+    )
+    partner_penalty = (
+        (df["channel"] == "partner").to_numpy(dtype=float)
+        * np.sqrt(df["support_tickets"] + 1.0)
+        * 6.5
+    )
     enterprise_boost = df["is_enterprise"].to_numpy(dtype=float) * 25.0
-    interaction = (df["product_line"] == "gamma").to_numpy(dtype=float) * df["num_integrations"] * 1.8
+    interaction = (
+        (df["product_line"] == "gamma").to_numpy(dtype=float)
+        * df["num_integrations"]
+        * 1.8
+    )
     noise = rng.normal(loc=0.0, scale=8.0, size=num_rows)
 
     target = (
@@ -95,7 +129,9 @@ def build_virtual_regression_dataframe(num_rows: int = 3000, seed: int = 42) -> 
     return df
 
 
-def ensure_virtual_dataset(dataset_dir: Path, num_rows: int, seed: int, force_generate: bool) -> Path:
+def ensure_virtual_dataset(
+    dataset_dir: Path, num_rows: int, seed: int, force_generate: bool
+) -> Path:
     dataset_dir.mkdir(parents=True, exist_ok=True)
     dataset_path = dataset_dir / f"virtual_regression_{num_rows}.parquet"
     csv_path = dataset_dir / f"virtual_regression_{num_rows}.csv"
@@ -172,7 +208,11 @@ def run_regression_demo(
 
     print(json.dumps(metrics, indent=2))
     print("\nPrediction preview:")
-    print(results[[TARGET_COLUMN, "prediction", "residual"]].head(10).to_string(index=False))
+    print(
+        results[[TARGET_COLUMN, "prediction", "residual"]]
+        .head(10)
+        .to_string(index=False)
+    )
     print(f"\nSaved predictions to {predictions_path}")
     print(f"Saved metrics to {metrics_path}")
 
@@ -180,9 +220,18 @@ def run_regression_demo(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate and run a virtual regression demo for SAP RPT OSS.")
-    parser.add_argument("--rows", type=int, default=3000, help="Number of synthetic rows to generate.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for data generation and splitting.")
+    parser = argparse.ArgumentParser(
+        description="Generate and run a virtual regression demo for SAP RPT OSS."
+    )
+    parser.add_argument(
+        "--rows", type=int, default=3000, help="Number of synthetic rows to generate."
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for data generation and splitting.",
+    )
     parser.add_argument("--test-size", type=float, default=0.2, help="Test set ratio.")
     parser.add_argument(
         "--checkpoint",
@@ -190,7 +239,12 @@ def parse_args() -> argparse.Namespace:
         default="2025-11-04_sap-rpt-one-oss.pt",
         help="Checkpoint filename on Hugging Face or a local .pt checkpoint path.",
     )
-    parser.add_argument("--bagging", type=int, default=1, help="Bagging rounds for SAP_RPT_OSS_Regressor.")
+    parser.add_argument(
+        "--bagging",
+        type=int,
+        default=1,
+        help="Bagging rounds for SAP_RPT_OSS_Regressor.",
+    )
     parser.add_argument(
         "--max-context-size",
         type=int,
@@ -203,7 +257,11 @@ def parse_args() -> argparse.Namespace:
         default=128,
         help="Batch size for query rows during prediction.",
     )
-    parser.add_argument("--force-generate", action="store_true", help="Regenerate the synthetic dataset.")
+    parser.add_argument(
+        "--force-generate",
+        action="store_true",
+        help="Regenerate the synthetic dataset.",
+    )
     parser.add_argument(
         "--generate-only",
         action="store_true",

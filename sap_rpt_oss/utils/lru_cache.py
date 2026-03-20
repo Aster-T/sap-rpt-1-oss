@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
 class LRU_Cache:
     """
     This is just a remake of functools.lru_cache without the function call.
