@@ -288,7 +288,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
                 metric_reg = r2_score(masked_logits, masked_labels)
                 metric_reg = torch.nan_to_num(metric_reg)
                 metric_reg = torch.clip(metric_reg, -1, 1)
-            except:
+            except Exception:
                 metric_reg = torch.tensor(0).float()
                 print("error calculating r2 score in the training loop")
         return logits, loss_reg, metric_reg
@@ -398,7 +398,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
             self.load_state_dict(
                 {k.removeprefix("module."): v for k, v in state_dict.items()}
             )
-        except:
+        except Exception:
             return self.load_weights(checkpoint_path, device, is_copy_last_layer=True)
 
     def extract_prediction_classification(

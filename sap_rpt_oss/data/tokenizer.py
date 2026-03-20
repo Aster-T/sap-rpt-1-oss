@@ -183,7 +183,7 @@ class Tokenizer:
         # in masking, those indices are increased by 1 to indicate that 0 is a mask
         # and then QUANTILE_DIMENSION - 1 is the max index
         labels_idx = np.arange(0, len(label_classes))
-        label_to_index = {l: idx for l, idx in zip(label_classes, labels_idx)}
+        label_to_index = {label: idx for label, idx in zip(label_classes, labels_idx)}
         y_concat = pd.concat([y_context, y_query]).values.flatten()
         result = np.asarray(
             [label_to_index.get(y, self.QUANTILE_DIMENSION - 2) for y in y_concat]
