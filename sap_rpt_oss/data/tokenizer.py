@@ -22,7 +22,7 @@ from sap_rpt_oss.utils.lru_cache import LRU_Cache
 
 class Tokenizer:
     QUANTILE_DIMENSION = QUANTILE_DIMENSION_DEFAULT
-    sentence_embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
+    sentence_embedding_model_name = "sentence-transformers/all-MiniLM-L12-v2"
     embedding_dim = embedding_model_to_dimension_and_pooling[
         sentence_embedding_model_name
     ][0]
