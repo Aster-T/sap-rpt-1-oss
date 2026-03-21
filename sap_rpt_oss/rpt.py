@@ -144,7 +144,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         self.X_ = X
 
         self.bagging_config = self.bagging
-        if X.shape[0] < self.max_context_size:
+        if self.bagging == "auto" and X.shape[0] < self.max_context_size:
             self.bagging_config = 1
 
         self.y_ = y
@@ -178,7 +178,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
             # For bagging, we use replacement
             df_train = df_train.sample(
                 self.max_context_size,
-                replace=False,
+                replace=True,
                 random_state=self.seed + bagging_index,
             )
         elif len(df_train) > self.max_context_size:

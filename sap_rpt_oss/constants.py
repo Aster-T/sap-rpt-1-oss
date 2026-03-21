@@ -7,6 +7,7 @@ from enum import Enum
 
 embedding_model_to_dimension_and_pooling = {
     "sentence-transformers/all-MiniLM-L6-v2": (384, "mean"),
+    "sentence-transformers/all-MiniLM-L12-v2": (384, "mean"),
     "intfloat/multilingual-e5-small": (384, "mean"),
     "Alibaba-NLP/gte-multilingual-base": (768, "cls"),
 }
