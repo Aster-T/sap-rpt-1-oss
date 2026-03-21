@@ -6,7 +6,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 
 from sap_rpt_oss.configs import FINETUNE_CONFIG, FinetuneConfig
-from sap_rpt_oss.model.lightning_model import LightningModel
+from sap_rpt_oss.model.lightning_model import LightningModelRPT
 
 
 def infer_precision() -> str:
@@ -54,7 +54,7 @@ def build_trainer(
 
 def run_stage(
     config: FinetuneConfig,
-    model: LightningModel,
+    model: LightningModelRPT,
     data_root: Path,
     output_root: Path,
     max_num_rows: int,
@@ -94,7 +94,7 @@ def main():
     if config.micro_batch_size != 1:
         raise ValueError("This training pipeline assumes a micro batch size of 1")
 
-    model = LightningModel(
+    model = LightningModelRPT(
         model_size=config.model_size,
         checkpoint=config.pretrained_checkpoint,
         learning_rate=config.learning_rate,

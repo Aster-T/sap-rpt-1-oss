@@ -14,7 +14,7 @@ from sap_rpt_oss.data.tokenizer import Tokenizer
 from sap_rpt_oss.model.torch_model import RPT
 
 
-class LightningModel(LightningModule):
+class LightningModelRPT(LightningModule):
     def __init__(
         self,
         model_size: Union[ModelSize, str] = ModelSize.base,
