@@ -86,7 +86,7 @@ class LightningModel(LightningModule):
     def setup(self, stage: Optional[str] = None):
         del stage
         if self.checkpoint is not None and not self._weights_loaded:
-            # Load on CPU first and let Lightning place the module on the training device.
+            # 先把权重加载到 CPU，再交给 Lightning 迁移到实际训练设备。
             self.model.load_weights(self.checkpoint, device=torch.device("cpu"))
             self._weights_loaded = True
 
