@@ -7,7 +7,7 @@ from sap_rpt_oss.constants import ModelSize
 
 @dataclass(slots=True)
 class FinetuneConfig:
-    data_root_path: Path = Path("datasets")
+    data_root_path: Path = Path("tmp_smoke_datasets")
     output_root_path: Path = Path("outputs/finetune")
     pretrained_checkpoint: str = "2025-11-04_sap-rpt-one-oss.pt"
     checkpoint_root_path: Path | None = None
