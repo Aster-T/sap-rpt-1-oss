@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import torch
@@ -11,6 +12,8 @@ from sap_rpt_oss.model.lightning_model import LightningModel
 DATA_ROOT_PATH = Path("datasets")
 OUTPUT_ROOT_PATH = Path("outputs/finetune")
 PRETRAINED_CHECKPOINT = "2025-11-04_sap-rpt-one-oss.pt"
+CHECKPOINT_ROOT_PATH = None
+CHECKPOINT_SAVE_EVERY_N_TRAIN_STEPS = 100
 
 MODEL_SIZE = ModelSize.base
 LEARNING_RATE = 1e-4
@@ -66,13 +69,22 @@ def build_trainer(
     output_root: Path,
     max_steps: int,
     max_epochs: int,
+    checkpoint_root: Path | None = None,
 ) -> Trainer:
+    checkpoint_dir = (
+        Path(checkpoint_root)
+        if checkpoint_root is not None
+        else Path("checkpoints") / date.today().isoformat()
+    )
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     checkpoint_callback = ModelCheckpoint(
-        dirpath=output_root / "checkpoints",
-        filename="rpt-step{step:08d}",
-        save_last=True,
+        dirpath=checkpoint_dir,
+        filename="{step}-step",
+        auto_insert_metric_name=False,
+        save_last=False,
         save_top_k=-1,
-        every_n_train_steps=10_000,
+        every_n_train_steps=CHECKPOINT_SAVE_EVERY_N_TRAIN_STEPS,
     )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     logger = CSVLogger(save_dir=str(output_root), name="logs")
@@ -100,6 +112,7 @@ def run_stage(
     max_num_rows: int,
     max_steps: int,
     max_epochs: int,
+    checkpoint_root: Path | None = None,
 ):
     output_root.mkdir(parents=True, exist_ok=True)
     model.set_training_data_from_root(
@@ -122,6 +135,7 @@ def run_stage(
         output_root=output_root,
         max_steps=max_steps,
         max_epochs=max_epochs,
+        checkpoint_root=checkpoint_root,
     )
     trainer.fit(model)
 
@@ -147,6 +161,7 @@ def main():
         max_num_rows=STAGE1_MAX_NUM_ROWS,
         max_steps=MAX_STEPS,
         max_epochs=MAX_EPOCHS,
+        checkpoint_root=CHECKPOINT_ROOT_PATH,
     )
 
     if CURRICULUM_STAGE2_DATA_ROOT_PATH is not None:
@@ -157,6 +172,7 @@ def main():
             max_num_rows=CURRICULUM_STAGE2_MAX_NUM_ROWS,
             max_steps=CURRICULUM_STAGE2_MAX_STEPS,
             max_epochs=CURRICULUM_STAGE2_MAX_EPOCHS,
+            checkpoint_root=CHECKPOINT_ROOT_PATH,
         )
 
 
