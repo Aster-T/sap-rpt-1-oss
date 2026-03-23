@@ -150,3 +150,4 @@ mlruns/**
 datasets/
 tmp_smoke_datasets/
 tmp*.py
+outputs/

@@ -69,6 +69,19 @@ class Tokenizer:
         return torch.tensor(results, dtype=torch.float16)
 
     @staticmethod
+    def stable_unique_with_first_indices(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Returns unique values in first-occurrence order, together with their positional indices.
+
+        We intentionally avoid np.unique here because it sorts values, which crashes for mixed
+        Python scalar types such as floats and strings contained in object-typed target columns.
+        """
+        is_first_occurrence = ~values.duplicated(keep="first")
+        first_indices = np.flatnonzero(is_first_occurrence.to_numpy())
+        unique_values = values.iloc[first_indices].to_numpy(dtype=object)
+        return unique_values, first_indices
+
+    @staticmethod
     def value_or_nan(values: Union[pd.Series, np.ndarray]):
         if isinstance(values, pd.Series):
             values = values.values
@@ -80,16 +93,32 @@ class Tokenizer:
         plus mean and std as torch tensors.
         TODO: maybe we should return and use torch tensors everywhere.
         """
-        train_data = y_train.astype(float).clip(-1e100, 1e100).values
+        train_data = y_train.astype(float).values
+        test_data = y_test.astype(float).values
+
+        train_data = np.where(np.isfinite(train_data), np.clip(train_data, -1e100, 1e100), np.nan)
+        test_data = np.where(np.isfinite(test_data), np.clip(test_data, -1e100, 1e100), np.nan)
+
+        finite_train = train_data[np.isfinite(train_data)]
+        if finite_train.size == 0:
+            total_rows = len(train_data) + len(test_data)
+            labels = np.zeros(total_rows, dtype=np.float32)
+            return labels, torch.tensor(0.0), torch.tensor(1.0)
 
         if self.is_valid:
             # remove outliers below 0.5th percentile and above 99.5th percentile
-            vmin, vmax = np.quantile(train_data, [0.005, 0.995])
+            vmin, vmax = np.nanquantile(train_data, [0.005, 0.995])
         else:
             # remove outliers below 2th percentile and above 98th percentile
-            vmin, vmax = np.percentile(train_data, [2, 98])
-        train_data = train_data.clip(vmin, vmax)
-        test_data = y_test.astype(float).clip(vmin, vmax).values
+            vmin, vmax = np.nanpercentile(train_data, [2, 98])
+        train_data = np.clip(train_data, vmin, vmax)
+        test_data = np.clip(test_data, vmin, vmax)
+
+        fill_value = np.nanmean(train_data)
+        if not np.isfinite(fill_value):
+            fill_value = float(np.mean(finite_train))
+        train_data = np.where(np.isnan(train_data), fill_value, train_data)
+        test_data = np.where(np.isnan(test_data), fill_value, test_data)
 
         scaler = StandardScaler()
         transformed_train_data = scaler.fit_transform(train_data)
@@ -310,7 +339,7 @@ class Tokenizer:
             # or maybe if one class is 0 (int) and one is "0" (string) -
             # well, let's hope that doesn't happen, but who knows.
             # In that case, add a prefix to classes and embed again
-            unique_classes, unique_indices = np.unique(texts, return_index=True)
+            unique_classes, unique_indices = self.stable_unique_with_first_indices(texts)
             should_be_unique_embeddings = data["text_embeddings"][:, -1].numpy()[
                 unique_indices
             ]
