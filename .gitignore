@@ -151,3 +151,4 @@ datasets/
 tmp_smoke_datasets/
 tmp*.py
 outputs/
+gen_data/
