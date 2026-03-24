@@ -264,8 +264,22 @@ class LightningModelRPT(LightningModule):
         )
 
         metric_name = "train_r2" if batch["is_regression"] else "train_accuracy"
-        self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
-        self.log(metric_name, metric, prog_bar=True, on_step=False, on_epoch=True)
+        self.log(
+            "train_loss",
+            loss,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=1,
+        )
+        self.log(
+            metric_name,
+            metric,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=1,
+        )
         return loss
 
     def configure_optimizers(self):

@@ -21,8 +21,8 @@ class FinetuneConfig:
     max_steps: int = 4_000_000
     max_epochs: int = 5
     micro_batch_size: int = 1
-    # DataLoader worker 数；大于 0 时数据预处理会放到 worker 进程中执行。
-    num_workers: int = 4
+    # DataLoader worker 数；这个项目的数据预处理包含文本 embedding，默认用 0 更稳。
+    num_workers: int = 0
     # 有效 batch size = micro_batch_size * accumulate_grad_batches。
     # 训练入口当前固定要求 micro_batch_size == 1，因此这里就是直接控制有效 batch size。
     accumulate_grad_batches: int | None = None

@@ -23,9 +23,9 @@ class SentenceEmbedder:
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
-            self.device = device
+            self.device = torch.device(device)
         self.model = self.model.to(self.device).eval()
-        if torch.cuda.is_available():
+        if self.device.type == "cuda":
             self.model = self.model.half()
             self.dtype = torch.float16
         else:
