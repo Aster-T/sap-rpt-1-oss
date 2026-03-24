@@ -100,6 +100,7 @@ def main():
         checkpoint=config.pretrained_checkpoint,
         learning_rate=config.learning_rate,
         warmup_steps=config.warmup_steps,
+        num_workers=config.num_workers,
         random_seed=config.random_seed,
     )
 

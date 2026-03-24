@@ -4,7 +4,7 @@
 
 import datetime
 import os
-from typing import Collection, Literal, Union
+from typing import Collection, Literal, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,7 @@ class Tokenizer:
         num_regression_bins=16,
         random_seed=None,
         is_valid=False,
+        sentence_embedder_device: Optional[Union[str, torch.device]] = None,
     ):
         self.regression_type = regression_type
         self.classification_type = classification_type
@@ -45,7 +46,7 @@ class Tokenizer:
 
         self.sentence_embedder = SentenceEmbedder(
             self.sentence_embedding_model_name,
-            device="cuda" if torch.cuda.is_available() else "cpu",
+            device=sentence_embedder_device,
         )
         self.cache = LRU_Cache(max_size=int(os.getenv("LRU_CACHE_SIZE", 1_000_000)))
 
@@ -276,6 +277,7 @@ class Tokenizer:
         }:
             if dt not in [
                 "bool",
+                "str",
                 "string[pyarrow]",
                 "bool[pyarrow]",
                 "category",

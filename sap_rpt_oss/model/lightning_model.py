@@ -21,6 +21,7 @@ class LightningModelRPT(LightningModule):
         checkpoint: Optional[Union[str, Path]] = None,
         learning_rate: float = 1e-4,
         warmup_steps: int = 1000,
+        num_workers: int = 0,
         regression_type: str = "l2",
         classification_type: str = "cross-entropy",
         num_regression_bins: int = 16,
@@ -33,6 +34,9 @@ class LightningModelRPT(LightningModule):
         self.model_size = self._normalize_model_size(model_size)
         self.learning_rate = learning_rate
         self.warmup_steps = warmup_steps
+        self.num_workers = int(num_workers)
+        if self.num_workers < 0:
+            raise ValueError("num_workers must be a non-negative integer")
         self.regression_type = regression_type
         self.classification_type = classification_type
         self.num_regression_bins = num_regression_bins
@@ -50,13 +54,26 @@ class LightningModelRPT(LightningModule):
             regression_type=self.regression_type,
             classification_type=self.classification_type,
         )
+        tokenizer_device = (
+            "cpu" if self.num_workers > 0 else ("cuda" if torch.cuda.is_available() else "cpu")
+        )
         self.tokenizer = Tokenizer(
             regression_type=self.regression_type,
             classification_type=self.classification_type,
             random_seed=self.random_seed,
             num_regression_bins=self.num_regression_bins,
             is_valid=self.is_valid,
+            sentence_embedder_device=tokenizer_device,
         )
+
+    def _build_dataloader(self, dataset) -> DataLoader:
+        dataloader_kwargs = {
+            "batch_size": None,
+            "num_workers": self.num_workers,
+        }
+        if self.num_workers > 0:
+            dataloader_kwargs["persistent_workers"] = True
+        return DataLoader(dataset, **dataloader_kwargs)
 
     @staticmethod
     def _normalize_model_size(model_size: Union[ModelSize, str]) -> ModelSize:
@@ -141,7 +158,7 @@ class LightningModelRPT(LightningModule):
             shuffle_table=shuffle_table,
             **dataset_kwargs,
         )
-        return DataLoader(dataset, batch_size=None)
+        return self._build_dataloader(dataset)
 
     def build_train_dataset_from_root(
         self,
@@ -186,7 +203,7 @@ class LightningModelRPT(LightningModule):
             regression_keyword=regression_keyword,
             **dataset_kwargs,
         )
-        return DataLoader(dataset, batch_size=None)
+        return self._build_dataloader(dataset)
 
     def set_training_data(
         self,
@@ -236,7 +253,7 @@ class LightningModelRPT(LightningModule):
                 "Training data is not configured. Call set_training_data(...) first "
                 "or pass train_dataloaders=... to trainer.fit(...)."
             )
-        return DataLoader(self._train_dataset, batch_size=None)
+        return self._build_dataloader(self._train_dataset)
 
     def training_step(self, batch, batch_idx):
         del batch_idx
