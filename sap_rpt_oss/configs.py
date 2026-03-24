@@ -32,6 +32,8 @@ class FinetuneConfig:
     # 按论文描述整理的数据采样参数。
     min_num_rows: int = 150
     query_size_range: tuple[int, int] = (50, 900)
+    # 跳过特征列数量超过该阈值的表；不包含 target 列。
+    max_num_features: int | None = 50
     target_column: str | None = None
     predict_chunk_size: int | None = None
     # 流式读取 parquet 时单次最多拉取的行数；为空时按采样规模自动推断。

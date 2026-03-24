@@ -71,6 +71,7 @@ def run_stage(
         shuffle_table=config.shuffle_table,
         regression_keyword=config.regression_keyword,
         min_num_rows=config.min_num_rows,
+        max_num_features=config.max_num_features,
         max_num_rows=max_num_rows,
         query_size_range=config.query_size_range,
         auto_select_target=config.auto_select_target,

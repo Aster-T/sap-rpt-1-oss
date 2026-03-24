@@ -12,6 +12,10 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from sap_rpt_oss.data.tokenizer import Tokenizer
 
 
+class TableSkippedError(ValueError):
+    pass
+
+
 class RPTTableDataset(Dataset):
     def __init__(
         self,
@@ -24,6 +28,7 @@ class RPTTableDataset(Dataset):
         shuffle_table: bool = False,
         drop_constant_columns: bool = True,
         max_num_columns: int = 500,
+        max_num_features: Optional[int] = None,
         min_num_rows: int = 2,
         max_num_rows: Optional[int] = None,
         query_size_range: Optional[tuple[int, int]] = None,
@@ -32,6 +37,7 @@ class RPTTableDataset(Dataset):
         self.tokenizer = tokenizer
         self.drop_constant_columns = drop_constant_columns
         self.max_num_columns = max_num_columns
+        self.max_num_features = max_num_features
         self.min_num_rows = min_num_rows
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
@@ -167,6 +173,13 @@ class RPTTableDataset(Dataset):
             target_column = str(table.columns[-1])
         if target_column not in table.columns:
             raise ValueError(f"target column '{target_column}' not found in the table")
+        if self.max_num_features is not None:
+            num_feature_columns = table.shape[1] - 1
+            if num_feature_columns > self.max_num_features:
+                raise TableSkippedError(
+                    f"table has {num_feature_columns} feature columns, "
+                    f"exceeds limit {self.max_num_features}"
+                )
 
         working_table = table.copy()
         if self.max_num_rows is not None and len(working_table) > self.max_num_rows:
@@ -205,6 +218,7 @@ class RPTParquetDataset(IterableDataset):
         shuffle_table: bool = False,
         drop_constant_columns: bool = True,
         max_num_columns: int = 500,
+        max_num_features: Optional[int] = None,
         min_num_rows: int = 2,
         max_num_rows: Optional[int] = None,
         query_size_range: Optional[tuple[int, int]] = None,
@@ -230,6 +244,7 @@ class RPTParquetDataset(IterableDataset):
         self.shuffle_table = shuffle_table
         self.drop_constant_columns = drop_constant_columns
         self.max_num_columns = max_num_columns
+        self.max_num_features = max_num_features
         self.min_num_rows = min_num_rows
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
@@ -249,6 +264,11 @@ class RPTParquetDataset(IterableDataset):
 
     def _infer_is_regression(self, parquet_path: Path) -> bool:
         return self.regression_keyword in parquet_path.as_posix().lower()
+
+    def _exceeds_feature_limit(self, table: pd.DataFrame) -> bool:
+        if self.max_num_features is None:
+            return False
+        return table.shape[1] - 1 > self.max_num_features
 
     def _resolve_streaming_read_batch_size(
         self, streaming_read_batch_size: Optional[int]
@@ -363,6 +383,8 @@ class RPTParquetDataset(IterableDataset):
             table = self._read_probe_table(parquet_path)
             if table is None:
                 continue
+            if self._exceeds_feature_limit(table):
+                continue
 
             regression_candidates, classification_candidates = (
                 self._get_target_candidates(table)
@@ -426,11 +448,14 @@ class RPTParquetDataset(IterableDataset):
                 shuffle_table=self.shuffle_table,
                 drop_constant_columns=self.drop_constant_columns,
                 max_num_columns=self.max_num_columns,
+                max_num_features=self.max_num_features,
                 min_num_rows=self.min_num_rows,
                 max_num_rows=self.max_num_rows,
                 query_size_range=self.query_size_range,
                 random_seed=seed,
             )
+        except TableSkippedError:
+            return
         except Exception as exc:
             raise ValueError(
                 f"failed to build batches from {parquet_path}: {exc}"
@@ -450,6 +475,8 @@ class RPTParquetDataset(IterableDataset):
         seed_offset: int,
     ) -> Iterator[dict[str, object]]:
         for chunk_idx, table in self._iter_table_chunks(parquet_path):
+            if self._exceeds_feature_limit(table):
+                continue
             if self.skip_ineligible_target and not self._is_eligible_target_column(
                 table, target_column, is_regression
             ):
@@ -484,6 +511,8 @@ class RPTParquetDataset(IterableDataset):
         else:
             for file_idx, parquet_path in enumerate(parquet_files):
                 for chunk_idx, table in self._iter_table_chunks(parquet_path):
+                    if self._exceeds_feature_limit(table):
+                        continue
                     target_column = (
                         self.target_column
                         if self.target_column is not None
