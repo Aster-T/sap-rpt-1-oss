@@ -21,6 +21,9 @@ class FinetuneConfig:
     max_steps: int = 4_000_000
     max_epochs: int = 5
     micro_batch_size: int = 1
+    # 有效 batch size = micro_batch_size * accumulate_grad_batches。
+    # 训练入口当前固定要求 micro_batch_size == 1，因此这里就是直接控制有效 batch size。
+    accumulate_grad_batches: int | None = None
     gradient_clip_val: float = 1.0
     log_every_n_steps: int = 50
 
@@ -29,6 +32,8 @@ class FinetuneConfig:
     query_size_range: tuple[int, int] = (50, 900)
     target_column: str | None = None
     predict_chunk_size: int | None = None
+    # 流式读取 parquet 时单次最多拉取的行数；为空时按采样规模自动推断。
+    streaming_read_batch_size: int | None = None
     shuffle_table: bool = True
     regression_keyword: str = "regression"
     random_seed: int = 42
@@ -51,7 +56,11 @@ class FinetuneConfig:
     curriculum_stage2_max_epochs: int = 5
 
     @property
-    def accumulate_grad_batches(self) -> int:
+    def resolved_accumulate_grad_batches(self) -> int:
+        if self.accumulate_grad_batches is not None:
+            if self.accumulate_grad_batches <= 0:
+                raise ValueError("accumulate_grad_batches must be a positive integer")
+            return self.accumulate_grad_batches
         return 128 if self.model_size == ModelSize.mini else 256
 
     @property

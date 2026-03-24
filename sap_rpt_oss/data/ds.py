@@ -1,12 +1,13 @@
 import datetime
-from pathlib import Path
 from math import ceil
-from typing import Optional, Union
+from pathlib import Path
+from typing import Iterator, Optional, Union
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from sap_rpt_oss.data.tokenizer import Tokenizer
 
@@ -36,7 +37,13 @@ class RPTTableDataset(Dataset):
         self.query_size_range = query_size_range
         self.random_seed = random_seed
         self.rng = np.random.default_rng(self.random_seed)
-        self.batches = self._build_batches(
+        (
+            self.fit_df,
+            self.predict_df,
+            self.target_column,
+            self.is_regression,
+            self.predict_chunk_size,
+        ) = self._prepare_table(
             table=table,
             fit_size=fit_size,
             is_regression=is_regression,
@@ -46,10 +53,34 @@ class RPTTableDataset(Dataset):
         )
 
     def __len__(self):
-        return len(self.batches)
+        return ceil(len(self.predict_df) / self.predict_chunk_size)
 
     def __getitem__(self, index):
-        return self.batches[index]
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+
+        start = index * self.predict_chunk_size
+        end = min(len(self.predict_df), start + self.predict_chunk_size)
+        predict_chunk = self.predict_df.iloc[start:end]
+
+        x_fit = self.fit_df.drop(columns=[self.target_column])
+        y_fit = self.fit_df[[self.target_column]]
+        x_predict = predict_chunk.drop(columns=[self.target_column])
+        y_predict = predict_chunk[[self.target_column]]
+
+        task = "regression" if self.is_regression else "classification"
+        data, labels, _ = self.tokenizer(
+            x_fit,
+            y_fit,
+            x_predict,
+            y_predict,
+            task,
+        )
+        return {
+            "data": data,
+            "labels": labels,
+            "is_regression": self.is_regression,
+        }
 
     def _next_random_state(self) -> int:
         return int(self.rng.integers(0, 2**32 - 1))
@@ -115,7 +146,7 @@ class RPTTableDataset(Dataset):
         fit_rows = len(fit_df)
         return combined.iloc[:fit_rows].copy(), combined.iloc[fit_rows:].copy()
 
-    def _build_batches(
+    def _prepare_table(
         self,
         table: pd.DataFrame,
         target_column: Optional[str],
@@ -123,7 +154,7 @@ class RPTTableDataset(Dataset):
         is_regression: bool,
         predict_chunk_size: Optional[int],
         shuffle_table: bool,
-    ) -> list[dict[str, object]]:
+    ) -> tuple[pd.DataFrame, pd.DataFrame, str, bool, int]:
         if not isinstance(table, pd.DataFrame):
             raise TypeError("table must be a pandas DataFrame")
         if table.shape[1] == 0:
@@ -160,36 +191,10 @@ class RPTTableDataset(Dataset):
         if chunk_size <= 0:
             raise ValueError("predict_chunk_size must be a positive integer")
 
-        task = "regression" if is_regression else "classification"
-        batches = []
-        for chunk_idx in range(ceil(len(predict_df) / chunk_size)):
-            start = chunk_idx * chunk_size
-            end = min(len(predict_df), start + chunk_size)
-            predict_chunk = predict_df.iloc[start:end]
-
-            x_fit = fit_df.drop(columns=[target_column])
-            y_fit = fit_df[[target_column]]
-            x_predict = predict_chunk.drop(columns=[target_column])
-            y_predict = predict_chunk[[target_column]]
-
-            data, labels, _ = self.tokenizer(
-                x_fit,
-                y_fit,
-                x_predict,
-                y_predict,
-                task,
-            )
-            batches.append(
-                {
-                    "data": data,
-                    "labels": labels,
-                    "is_regression": is_regression,
-                }
-            )
-        return batches
+        return fit_df, predict_df, target_column, is_regression, chunk_size
 
 
-class RPTParquetDataset(Dataset):
+class RPTParquetDataset(IterableDataset):
     def __init__(
         self,
         root_dir: Union[str, Path],
@@ -210,6 +215,7 @@ class RPTParquetDataset(Dataset):
         balance_classification_tasks: bool = False,
         random_seed: int = 42,
         regression_keyword: str = "regression",
+        streaming_read_batch_size: Optional[int] = None,
     ):
         self.root_dir = Path(root_dir).expanduser().resolve()
         if not self.root_dir.exists():
@@ -234,20 +240,53 @@ class RPTParquetDataset(Dataset):
         self.balance_classification_tasks = balance_classification_tasks
         self.random_seed = random_seed
         self.regression_keyword = regression_keyword.lower()
+        self.streaming_read_batch_size = self._resolve_streaming_read_batch_size(
+            streaming_read_batch_size
+        )
         self.parquet_files = sorted(self.root_dir.rglob("*.parquet"))
         if not self.parquet_files:
             raise FileNotFoundError(f"no parquet files found under {self.root_dir}")
 
-        self.batches = self._build_batches()
-
-    def __len__(self):
-        return len(self.batches)
-
-    def __getitem__(self, index):
-        return self.batches[index]
-
     def _infer_is_regression(self, parquet_path: Path) -> bool:
         return self.regression_keyword in parquet_path.as_posix().lower()
+
+    def _resolve_streaming_read_batch_size(
+        self, streaming_read_batch_size: Optional[int]
+    ) -> int:
+        if streaming_read_batch_size is not None:
+            batch_size = int(streaming_read_batch_size)
+            if batch_size <= 0:
+                raise ValueError(
+                    "streaming_read_batch_size must be a positive integer"
+                )
+            return batch_size
+
+        inferred_batch_size = self.min_num_rows
+        if self.max_num_rows is not None:
+            inferred_batch_size = max(inferred_batch_size, int(self.max_num_rows))
+        if self.query_size_range is not None:
+            inferred_batch_size = max(
+                inferred_batch_size,
+                max(int(self.query_size_range[0]), int(self.query_size_range[1])) + 1,
+            )
+        return inferred_batch_size
+
+    def _iter_table_chunks(
+        self, parquet_path: Path
+    ) -> Iterator[tuple[int, pd.DataFrame]]:
+        parquet_file = pq.ParquetFile(parquet_path)
+        for chunk_idx, record_batch in enumerate(
+            parquet_file.iter_batches(batch_size=self.streaming_read_batch_size)
+        ):
+            table = record_batch.to_pandas()
+            if len(table) < self.min_num_rows:
+                continue
+            yield chunk_idx, table
+
+    def _read_probe_table(self, parquet_path: Path) -> Optional[pd.DataFrame]:
+        for _, table in self._iter_table_chunks(parquet_path):
+            return table
+        return None
 
     @staticmethod
     def _first_non_null_value(series: pd.Series):
@@ -314,13 +353,15 @@ class RPTParquetDataset(Dataset):
         rng = np.random.default_rng(seed)
         return candidates[int(rng.integers(0, len(candidates)))]
 
-    def _build_auto_target_specs(self) -> list[dict[str, object]]:
+    def _build_auto_target_specs(
+        self, parquet_files: list[Path]
+    ) -> list[dict[str, object]]:
         regression_specs = []
         classification_specs = []
 
-        for file_idx, parquet_path in enumerate(self.parquet_files):
-            table = pd.read_parquet(parquet_path)
-            if len(table) < self.min_num_rows:
+        for file_idx, parquet_path in enumerate(parquet_files):
+            table = self._read_probe_table(parquet_path)
+            if table is None:
                 continue
 
             regression_candidates, classification_candidates = (
@@ -342,7 +383,7 @@ class RPTParquetDataset(Dataset):
                         "source_path": parquet_path,
                         "target_column": self._choose_target_column(
                             classification_candidates,
-                            self.random_seed + len(self.parquet_files) + file_idx,
+                            self.random_seed + len(parquet_files) + file_idx,
                         ),
                         "is_regression": False,
                     }
@@ -363,24 +404,23 @@ class RPTParquetDataset(Dataset):
             )
 
         all_specs = regression_specs + classification_specs
-        if not all_specs:
-            raise ValueError(f"no eligible parquet tables found under {self.root_dir}")
-
         np.random.default_rng(self.random_seed).shuffle(all_specs)
         return all_specs
 
-    def _build_batches_from_specs(
-        self, target_specs: list[dict[str, object]]
-    ) -> list[dict[str, object]]:
-        batches = []
-        for spec_idx, spec in enumerate(target_specs):
-            parquet_path = Path(spec["source_path"])
-            table = pd.read_parquet(parquet_path)
+    def _iter_batches_from_table(
+        self,
+        parquet_path: Path,
+        table: pd.DataFrame,
+        target_column: str,
+        is_regression: bool,
+        seed: int,
+    ) -> Iterator[dict[str, object]]:
+        try:
             dataset = RPTTableDataset(
                 table=table,
-                target_column=spec["target_column"],
+                target_column=target_column,
                 fit_size=self.fit_size,
-                is_regression=bool(spec["is_regression"]),
+                is_regression=is_regression,
                 tokenizer=self.tokenizer,
                 predict_chunk_size=self.predict_chunk_size,
                 shuffle_table=self.shuffle_table,
@@ -389,58 +429,80 @@ class RPTParquetDataset(Dataset):
                 min_num_rows=self.min_num_rows,
                 max_num_rows=self.max_num_rows,
                 query_size_range=self.query_size_range,
-                random_seed=self.random_seed + spec_idx,
+                random_seed=seed,
             )
-            for batch in dataset:
-                batch["source_path"] = str(parquet_path)
-                batch["target_column"] = spec["target_column"]
-                batches.append(batch)
-        return batches
+        except Exception as exc:
+            raise ValueError(
+                f"failed to build batches from {parquet_path}: {exc}"
+            ) from exc
 
-    def _build_batches(self) -> list[dict[str, object]]:
-        if self.auto_select_target:
-            return self._build_batches_from_specs(self._build_auto_target_specs())
+        for batch_idx in range(len(dataset)):
+            batch = dataset[batch_idx]
+            batch["source_path"] = str(parquet_path)
+            batch["target_column"] = target_column
+            yield batch
 
-        batches = []
-        for file_idx, parquet_path in enumerate(self.parquet_files):
-            table = pd.read_parquet(parquet_path)
-            if len(table) < self.min_num_rows:
-                continue
-            is_regression = self._infer_is_regression(parquet_path)
-            target_column = (
-                self.target_column
-                if self.target_column is not None
-                else str(table.columns[-1])
-            )
+    def _iter_batches_for_file(
+        self,
+        parquet_path: Path,
+        target_column: str,
+        is_regression: bool,
+        seed_offset: int,
+    ) -> Iterator[dict[str, object]]:
+        for chunk_idx, table in self._iter_table_chunks(parquet_path):
             if self.skip_ineligible_target and not self._is_eligible_target_column(
                 table, target_column, is_regression
             ):
                 continue
-            try:
-                dataset = RPTTableDataset(
-                    table=table,
-                    target_column=target_column,
-                    fit_size=self.fit_size,
-                    is_regression=is_regression,
-                    tokenizer=self.tokenizer,
-                    predict_chunk_size=self.predict_chunk_size,
-                    shuffle_table=self.shuffle_table,
-                    drop_constant_columns=self.drop_constant_columns,
-                    max_num_columns=self.max_num_columns,
-                    min_num_rows=self.min_num_rows,
-                    max_num_rows=self.max_num_rows,
-                    query_size_range=self.query_size_range,
-                    random_seed=self.random_seed + file_idx,
-                )
-            except Exception as exc:
-                raise ValueError(
-                    f"failed to build batches from {parquet_path}: {exc}"
-                ) from exc
+            yield from self._iter_batches_from_table(
+                parquet_path=parquet_path,
+                table=table,
+                target_column=target_column,
+                is_regression=is_regression,
+                seed=self.random_seed + seed_offset + chunk_idx,
+            )
 
-            for batch in dataset:
-                batch["source_path"] = str(parquet_path)
-                batch["target_column"] = target_column
-                batches.append(batch)
-        if not batches:
+    def __iter__(self) -> Iterator[dict[str, object]]:
+        worker_info = get_worker_info()
+        parquet_files = self.parquet_files
+        if worker_info is not None:
+            parquet_files = parquet_files[worker_info.id :: worker_info.num_workers]
+            if not parquet_files:
+                return
+
+        yielded_any = False
+        if self.auto_select_target:
+            for spec_idx, spec in enumerate(self._build_auto_target_specs(parquet_files)):
+                for batch in self._iter_batches_for_file(
+                    parquet_path=Path(spec["source_path"]),
+                    target_column=str(spec["target_column"]),
+                    is_regression=bool(spec["is_regression"]),
+                    seed_offset=spec_idx * 10_000,
+                ):
+                    yielded_any = True
+                    yield batch
+        else:
+            for file_idx, parquet_path in enumerate(parquet_files):
+                for chunk_idx, table in self._iter_table_chunks(parquet_path):
+                    target_column = (
+                        self.target_column
+                        if self.target_column is not None
+                        else str(table.columns[-1])
+                    )
+                    is_regression = self._infer_is_regression(parquet_path)
+                    if self.skip_ineligible_target and not self._is_eligible_target_column(
+                        table, target_column, is_regression
+                    ):
+                        continue
+                    for batch in self._iter_batches_from_table(
+                        parquet_path=parquet_path,
+                        table=table,
+                        target_column=target_column,
+                        is_regression=is_regression,
+                        seed=self.random_seed + file_idx * 10_000 + chunk_idx,
+                    ):
+                        yielded_any = True
+                        yield batch
+
+        if not yielded_any and worker_info is None:
             raise ValueError(f"no eligible parquet tables found under {self.root_dir}")
-        return batches

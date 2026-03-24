@@ -141,7 +141,7 @@ class LightningModelRPT(LightningModule):
             shuffle_table=shuffle_table,
             **dataset_kwargs,
         )
-        return DataLoader(dataset, batch_size=None, shuffle=False)
+        return DataLoader(dataset, batch_size=None)
 
     def build_train_dataset_from_root(
         self,
@@ -186,7 +186,7 @@ class LightningModelRPT(LightningModule):
             regression_keyword=regression_keyword,
             **dataset_kwargs,
         )
-        return DataLoader(dataset, batch_size=None, shuffle=False)
+        return DataLoader(dataset, batch_size=None)
 
     def set_training_data(
         self,
@@ -236,7 +236,7 @@ class LightningModelRPT(LightningModule):
                 "Training data is not configured. Call set_training_data(...) first "
                 "or pass train_dataloaders=... to trainer.fit(...)."
             )
-        return DataLoader(self._train_dataset, batch_size=None, shuffle=False)
+        return DataLoader(self._train_dataset, batch_size=None)
 
     def training_step(self, batch, batch_idx):
         del batch_idx
