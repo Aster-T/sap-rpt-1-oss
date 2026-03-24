@@ -10,6 +10,7 @@ class FinetuneConfig:
     data_root_path: Path = Path("datasets/t4/data_d")
     output_root_path: Path = Path("outputs/finetune")
     pretrained_checkpoint: str = "2025-11-04_sap-rpt-one-oss.pt"
+    resume_checkpoint_path: Path | None = None
     checkpoint_root_path: Path | None = None
     checkpoint_save_every_n_train_steps: int = 100
 
@@ -72,6 +73,18 @@ class FinetuneConfig:
         if self.checkpoint_root_path is not None:
             return Path(self.checkpoint_root_path)
         return Path("checkpoints") / date.today().isoformat()
+
+    @property
+    def resolved_resume_checkpoint_path(self) -> Path | None:
+        if self.resume_checkpoint_path is None:
+            return None
+
+        checkpoint_path = Path(self.resume_checkpoint_path).expanduser()
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"resume checkpoint does not exist: {checkpoint_path}"
+            )
+        return checkpoint_path.resolve()
 
     @property
     def use_curriculum_stage2(self) -> bool:

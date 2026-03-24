@@ -60,6 +60,7 @@ def run_stage(
     max_num_rows: int,
     max_steps: int,
     max_epochs: int,
+    resume_checkpoint_path: Path | None = None,
 ):
     output_root.mkdir(parents=True, exist_ok=True)
     model.set_training_data_from_root(
@@ -86,19 +87,23 @@ def run_stage(
         max_steps=max_steps,
         max_epochs=max_epochs,
     )
-    trainer.fit(model)
+    if resume_checkpoint_path is None:
+        trainer.fit(model)
+    else:
+        trainer.fit(model, ckpt_path=str(resume_checkpoint_path))
 
 
 def main():
     config = FINETUNE_CONFIG
     seed_everything(config.random_seed, workers=True)
+    resume_checkpoint_path = config.resolved_resume_checkpoint_path
 
     if config.micro_batch_size != 1:
         raise ValueError("This training pipeline assumes a micro batch size of 1")
 
     model = LightningModelRPT(
         model_size=config.model_size,
-        checkpoint=config.pretrained_checkpoint,
+        checkpoint=None if resume_checkpoint_path is not None else config.pretrained_checkpoint,
         learning_rate=config.learning_rate,
         warmup_steps=config.warmup_steps,
         num_workers=config.num_workers,
@@ -113,6 +118,7 @@ def main():
         max_num_rows=config.stage1_max_num_rows,
         max_steps=config.max_steps,
         max_epochs=config.max_epochs,
+        resume_checkpoint_path=resume_checkpoint_path,
     )
 
     if config.use_curriculum_stage2:
@@ -124,6 +130,7 @@ def main():
             max_num_rows=config.curriculum_stage2_max_num_rows,
             max_steps=config.curriculum_stage2_max_steps,
             max_epochs=config.curriculum_stage2_max_epochs,
+            resume_checkpoint_path=None,
         )
 
 
