@@ -1,3 +1,9 @@
+"""
+python -m sap_rpt_oss.utils.data_div ./datas/chunk-0000 ./datas/chunk-0001 --output ./datas_classified
+
+python -m sap_rpt_oss.utils.data_div ./datas/chunk-0000 --output ./datas_classified --summary-json ./datas_classified/summary.json
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -165,11 +171,18 @@ def iter_source_items(input_paths: Iterable[Path]) -> list[SourceItem]:
             raise ValueError(f"input directory does not contain parquet files: {path}")
 
         for parquet_path in parquet_files:
+            relative_path = parquet_path.relative_to(path)
+            if len(relative_path.parts) > 1:
+                group_name = relative_path.parts[0]
+                destination_relative_path = Path(*relative_path.parts[1:])
+            else:
+                group_name = path.name
+                destination_relative_path = relative_path
             source_items.append(
                 SourceItem(
                     source_path=parquet_path,
-                    group_name=path.name,
-                    relative_path=parquet_path.relative_to(path),
+                    group_name=group_name,
+                    relative_path=destination_relative_path,
                 )
             )
 
