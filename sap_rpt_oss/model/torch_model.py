@@ -4,6 +4,7 @@
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, Optional, Union
 
@@ -370,6 +371,8 @@ class RPT(nn.Module, ModuleUtilsMixin):
             match = re.search(r"in_context_encoder\.(\d+)", key)
             if match:
                 layer_numbers.append(int(match.group(1)))
+        if not layer_numbers:
+            return state_dict
         last_layer_num = max(layer_numbers)
 
         for k in list(state_dict.keys()):
@@ -383,23 +386,72 @@ class RPT(nn.Module, ModuleUtilsMixin):
                     ] = state_dict[k]
         return state_dict
 
+    @staticmethod
+    def _extract_state_dict(checkpoint: object) -> dict[str, torch.Tensor]:
+        if not isinstance(checkpoint, Mapping):
+            raise TypeError(
+                f"Checkpoint must be a mapping, got {type(checkpoint).__name__}"
+            )
+
+        state_dict = checkpoint.get("state_dict", checkpoint)
+        if not isinstance(state_dict, Mapping):
+            raise TypeError(
+                "Checkpoint 'state_dict' entry must be a mapping of parameter names "
+                f"to tensors, got {type(state_dict).__name__}"
+            )
+
+        return dict(state_dict)
+
+    @staticmethod
+    def _normalize_state_dict_keys(
+        state_dict: Mapping[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        normalized_state_dict: dict[str, torch.Tensor] = {}
+
+        for key, value in state_dict.items():
+            normalized_key = key
+            previous_key = None
+            while normalized_key != previous_key:
+                previous_key = normalized_key
+                for prefix in ("module.", "model."):
+                    if normalized_key.startswith(prefix):
+                        normalized_key = normalized_key.removeprefix(prefix)
+            normalized_state_dict[normalized_key] = value
+
+        return normalized_state_dict
+
     def load_weights(
         self,
         checkpoint_path: Union[str, Path],
         device: torch.device,
         is_copy_last_layer=True,
     ):
-        state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        # Always stage checkpoint tensors through CPU so a failed load attempt does not
+        # allocate CUDA memory repeatedly.
+        del device
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        state_dict = self._normalize_state_dict_keys(
+            self._extract_state_dict(checkpoint)
+        )
 
         try:
-            if is_copy_last_layer:
-                state_dict = self.copy_last_layer_weights_to_all(state_dict)
-            # Remove module. in front of all keys - maybe added by deepspeed?
-            self.load_state_dict(
-                {k.removeprefix("module."): v for k, v in state_dict.items()}
-            )
-        except Exception:
-            return self.load_weights(checkpoint_path, device, is_copy_last_layer=True)
+            self.load_state_dict(state_dict)
+            return
+        except RuntimeError as load_error:
+            if not is_copy_last_layer:
+                raise RuntimeError(
+                    f"Failed to load weights from checkpoint: {checkpoint_path}"
+                ) from load_error
+
+        copied_state_dict = self.copy_last_layer_weights_to_all(dict(state_dict))
+        try:
+            self.load_state_dict(copied_state_dict)
+        except RuntimeError as copied_load_error:
+            raise RuntimeError(
+                "Failed to load weights after normalizing checkpoint keys and "
+                "retrying with last-layer replication fallback. "
+                f"Checkpoint: {checkpoint_path}"
+            ) from copied_load_error
 
     def extract_prediction_classification(
         self, logits: torch.Tensor, targets: torch.Tensor, label_classes: np.ndarray

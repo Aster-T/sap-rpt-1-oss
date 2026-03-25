@@ -91,4 +91,12 @@ class FinetuneConfig:
         return self.curriculum_stage2_data_root_path is not None
 
 
+@dataclass(slots=True)
+class InferenceConfigs:
+    checkpoints_path: Path = Path("checkpoints")
+    input_root_path: Path = Path("datasets")
+    output_root_path: Path = Path("results")
+
+
 FINETUNE_CONFIG = FinetuneConfig()
+INFERENCE_CONFIG = InferenceConfigs()
