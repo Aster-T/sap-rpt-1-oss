@@ -479,7 +479,6 @@ class RPTParquetDataset(IterableDataset):
                 yield batch
         finally:
             del dataset
-            gc.collect()
 
     def _iter_batches_for_file(
         self,
