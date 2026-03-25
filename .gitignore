@@ -153,3 +153,4 @@ tmp*.py
 outputs/
 gen_data/
 checkpoints/
+test/
