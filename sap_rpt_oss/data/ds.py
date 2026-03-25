@@ -91,7 +91,9 @@ class RPTTableDataset(Dataset):
     def _next_random_state(self) -> int:
         return int(self.rng.integers(0, 2**32 - 1))
 
-    def _resolve_fit_rows(self, num_rows: int, fit_size: Optional[Union[int, float]]) -> int:
+    def _resolve_fit_rows(
+        self, num_rows: int, fit_size: Optional[Union[int, float]]
+    ) -> int:
         if self.query_size_range is not None:
             min_query_rows, max_query_rows = sorted(
                 (int(self.query_size_range[0]), int(self.query_size_range[1]))
@@ -114,7 +116,9 @@ class RPTTableDataset(Dataset):
 
             if isinstance(fit_size, float):
                 if not 0 < fit_size < 1:
-                    raise ValueError("fit_size as a float must be in the interval (0, 1)")
+                    raise ValueError(
+                        "fit_size as a float must be in the interval (0, 1)"
+                    )
                 fit_rows = int(num_rows * fit_size)
             else:
                 fit_rows = int(fit_size)
@@ -235,7 +239,9 @@ class RPTParquetDataset(IterableDataset):
         if not self.root_dir.exists():
             raise FileNotFoundError(f"root directory does not exist: {self.root_dir}")
         if not self.root_dir.is_dir():
-            raise NotADirectoryError(f"root directory is not a directory: {self.root_dir}")
+            raise NotADirectoryError(
+                f"root directory is not a directory: {self.root_dir}"
+            )
 
         self.target_column = target_column
         self.fit_size = fit_size
@@ -276,9 +282,7 @@ class RPTParquetDataset(IterableDataset):
         if streaming_read_batch_size is not None:
             batch_size = int(streaming_read_batch_size)
             if batch_size <= 0:
-                raise ValueError(
-                    "streaming_read_batch_size must be a positive integer"
-                )
+                raise ValueError("streaming_read_batch_size must be a positive integer")
             return batch_size
 
         inferred_batch_size = self.min_num_rows
@@ -461,11 +465,21 @@ class RPTParquetDataset(IterableDataset):
                 f"failed to build batches from {parquet_path}: {exc}"
             ) from exc
 
-        for batch_idx in range(len(dataset)):
-            batch = dataset[batch_idx]
-            batch["source_path"] = str(parquet_path)
-            batch["target_column"] = target_column
-            yield batch
+        try:
+            for batch_idx in range(len(dataset)):
+                try:
+                    batch = dataset[batch_idx]
+                except UnicodeDecodeError as exc:
+                    print(
+                        f"Skipping table {parquet_path} due to UnicodeDecodeError: {exc}"
+                    )
+                    return
+                batch["source_path"] = str(parquet_path)
+                batch["target_column"] = target_column
+                yield batch
+        finally:
+            del dataset
+            gc.collect()
 
     def _iter_batches_for_file(
         self,
@@ -499,7 +513,9 @@ class RPTParquetDataset(IterableDataset):
 
         yielded_any = False
         if self.auto_select_target:
-            for spec_idx, spec in enumerate(self._build_auto_target_specs(parquet_files)):
+            for spec_idx, spec in enumerate(
+                self._build_auto_target_specs(parquet_files)
+            ):
                 for batch in self._iter_batches_for_file(
                     parquet_path=Path(spec["source_path"]),
                     target_column=str(spec["target_column"]),
@@ -519,8 +535,11 @@ class RPTParquetDataset(IterableDataset):
                         else str(table.columns[-1])
                     )
                     is_regression = self._infer_is_regression(parquet_path)
-                    if self.skip_ineligible_target and not self._is_eligible_target_column(
-                        table, target_column, is_regression
+                    if (
+                        self.skip_ineligible_target
+                        and not self._is_eligible_target_column(
+                            table, target_column, is_regression
+                        )
                     ):
                         continue
                     for batch in self._iter_batches_from_table(
