@@ -5,6 +5,7 @@ from typing import Iterator, Optional, Union
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
@@ -298,14 +299,18 @@ class RPTParquetDataset(IterableDataset):
     def _iter_table_chunks(
         self, parquet_path: Path
     ) -> Iterator[tuple[int, pd.DataFrame]]:
-        parquet_file = pq.ParquetFile(parquet_path)
-        for chunk_idx, record_batch in enumerate(
-            parquet_file.iter_batches(batch_size=self.streaming_read_batch_size)
-        ):
-            table = record_batch.to_pandas()
-            if len(table) < self.min_num_rows:
-                continue
-            yield chunk_idx, table
+        try:
+            parquet_file = pq.ParquetFile(parquet_path)
+            for chunk_idx, record_batch in enumerate(
+                parquet_file.iter_batches(batch_size=self.streaming_read_batch_size)
+            ):
+                table = record_batch.to_pandas()
+                if len(table) < self.min_num_rows:
+                    continue
+                yield chunk_idx, table
+        except (OSError, pa.ArrowException) as exc:
+            print(f"Skipping parquet file {parquet_path} due to read error: {exc}")
+            return
 
     def _read_probe_table(self, parquet_path: Path) -> Optional[pd.DataFrame]:
         for _, table in self._iter_table_chunks(parquet_path):
