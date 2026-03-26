@@ -129,6 +129,7 @@ class TorchSelfAttention(nn.Module):
         self.value = nn.Linear(config.hidden_size, config.hidden_size)
 
         self.dropout = config.attention_probs_dropout_prob
+        self.training = config.training
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (
@@ -142,6 +143,7 @@ class TorchSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.FloatTensor] = None,
+        attn_weight: bool = False,
     ) -> torch.Tensor:
         """
         hidden_states: shape (batch_size, seq_len, hidden_size)

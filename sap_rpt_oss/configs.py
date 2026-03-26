@@ -17,6 +17,7 @@ class FinetuneConfig:
     model_size: ModelSize = ModelSize.base
     learning_rate: float = 1e-4
     warmup_steps: int = 1000
+    training: bool = True
 
     # 手写 PyTorch 训练循环按 step 停止；max_epochs 保留仅为兼容旧配置，不参与停止条件。
     max_steps: int = 4_000_000
