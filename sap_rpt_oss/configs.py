@@ -20,7 +20,7 @@ class FinetuneConfig:
     training: bool = True
 
     # 手写 PyTorch 训练循环按 step 停止；max_epochs 保留仅为兼容旧配置，不参与停止条件。
-    max_steps: int = 4_000_000
+    max_steps: int = 100_000
     max_epochs: int = 5
     micro_batch_size: int = 1
     # DataLoader worker 数；这个项目的数据预处理包含文本 embedding，默认用 0 更稳。
