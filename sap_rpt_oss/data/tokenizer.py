@@ -37,12 +37,14 @@ class Tokenizer:
         random_seed=None,
         is_valid=False,
         sentence_embedder_device: Optional[Union[str, torch.device]] = None,
+        verbose: bool = True,
     ):
         self.regression_type = regression_type
         self.classification_type = classification_type
         self.random_seed = random_seed
         self.num_regression_bins = num_regression_bins
         self.is_valid = is_valid
+        self.verbose = verbose
 
         self.sentence_embedder = SentenceEmbedder(
             self.sentence_embedding_model_name,
@@ -220,12 +222,14 @@ class Tokenizer:
         )
         return result, np.asarray(label_classes)
 
-    @staticmethod
-    def time_to_seconds(t: Union[datetime.time, pyarrow.time64]):
+    def time_to_seconds(self, t: Union[datetime.time, pyarrow.time64]):
+        if t is None or pd.isna(t):
+            return np.nan
         try:
             return t.hour * 3600 + t.minute * 60 + t.second + t.microsecond * 1e-6
-        except Exception:
-            print("Expected time found", type(t), t)
+        except (AttributeError, TypeError, ValueError):
+            if self.verbose:
+                print("Expected time found", type(t), t)
             return np.nan
 
     def convert_type_(
@@ -284,7 +288,8 @@ class Tokenizer:
                 "string",
                 "object",
             ]:
-                print(f"Data type {dt} not recognized! Defaulting to string")
+                if self.verbose:
+                    print(f"Data type {dt} not recognized! Defaulting to string")
             elif dt == "object" and not isinstance(
                 context_df[column_name].iloc[0], str
             ):
@@ -292,14 +297,16 @@ class Tokenizer:
                 if not is_null.iloc[0]:
                     value = context_df[column_name].iloc[0]
                 elif is_null.all():
-                    print("Warning, all column is null!")
+                    if self.verbose:
+                        print("Warning, all column is null!")
                     value = "skip_other_warning"
                 else:
                     value = context_df[column_name][~is_null].iloc[0]
                 if not isinstance(value, str):
-                    print(
-                        f"Warning, dtype is object, but first non-null value is {type(value)}. Converting to str."
-                    )
+                    if self.verbose:
+                        print(
+                            f"Warning, dtype is object, but first non-null value is {type(value)}. Converting to str."
+                        )
             dt = "object"
         return dt
 

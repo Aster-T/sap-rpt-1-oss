@@ -117,6 +117,7 @@ def build_model_and_tokenizer(
         num_regression_bins=16,
         is_valid=True,
         sentence_embedder_device=tokenizer_device,
+        verbose=False,
     )
     return model, tokenizer
 
