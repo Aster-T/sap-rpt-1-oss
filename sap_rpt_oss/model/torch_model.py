@@ -420,6 +420,127 @@ class RPT(nn.Module, ModuleUtilsMixin):
 
         return normalized_state_dict
 
+    @staticmethod
+    def _load_checkpoint(checkpoint_path: Union[str, Path]) -> Mapping[str, object]:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        if not isinstance(checkpoint, Mapping):
+            raise TypeError(
+                f"Checkpoint must be a mapping, got {type(checkpoint).__name__}"
+            )
+        return checkpoint
+
+    @classmethod
+    def inspect_checkpoint(
+        cls, checkpoint_path: Union[str, Path]
+    ) -> dict[str, Union[ModelSize, str]]:
+        checkpoint = cls._load_checkpoint(checkpoint_path)
+        state_dict = cls._normalize_state_dict_keys(cls._extract_state_dict(checkpoint))
+        hyper_parameters = checkpoint.get("hyper_parameters", {})
+
+        model_size = None
+        if isinstance(hyper_parameters, Mapping):
+            hyper_model_size = hyper_parameters.get("model_size")
+            if isinstance(hyper_model_size, ModelSize):
+                model_size = hyper_model_size
+            elif (
+                isinstance(hyper_model_size, str)
+                and hyper_model_size in ModelSize.__members__
+            ):
+                model_size = ModelSize[hyper_model_size]
+        if model_size is None:
+            model_size = cls._infer_model_size_from_state_dict(state_dict)
+
+        regression_type = "l2"
+        if isinstance(hyper_parameters, Mapping):
+            hyper_regression_type = hyper_parameters.get("regression_type")
+            if hyper_regression_type in {"l2", "reg-as-classif"}:
+                regression_type = hyper_regression_type
+            elif cls._infer_regression_type_from_state_dict(state_dict) == "reg-as-classif":
+                regression_type = "reg-as-classif"
+        elif cls._infer_regression_type_from_state_dict(state_dict) == "reg-as-classif":
+            regression_type = "reg-as-classif"
+
+        classification_type = "cross-entropy"
+        if isinstance(hyper_parameters, Mapping):
+            hyper_classification_type = hyper_parameters.get("classification_type")
+            if hyper_classification_type in {
+                "cross-entropy",
+                "clustering",
+                "clustering-cosine",
+            }:
+                classification_type = hyper_classification_type
+            elif cls._infer_classification_type_from_state_dict(state_dict) != "cross-entropy":
+                classification_type = cls._infer_classification_type_from_state_dict(
+                    state_dict
+                )
+        elif cls._infer_classification_type_from_state_dict(state_dict) != "cross-entropy":
+            classification_type = cls._infer_classification_type_from_state_dict(
+                state_dict
+            )
+
+        return {
+            "model_size": model_size,
+            "regression_type": regression_type,
+            "classification_type": classification_type,
+        }
+
+    @staticmethod
+    def _infer_model_size_from_state_dict(
+        state_dict: Mapping[str, torch.Tensor],
+    ) -> ModelSize:
+        layer_numbers = []
+        for key in state_dict:
+            match = re.search(r"in_context_encoder\.(\d+)", key)
+            if match:
+                layer_numbers.append(int(match.group(1)))
+
+        if not layer_numbers:
+            raise ValueError("Could not infer model depth from checkpoint state_dict")
+        num_layers = max(layer_numbers) + 1
+
+        hidden_size = None
+        for key in (
+            "dense_reg.weight",
+            "dense_classif.weight",
+            "cluster_dense.weight",
+            "output_head_reg.weight",
+        ):
+            tensor = state_dict.get(key)
+            if tensor is not None and tensor.ndim >= 2:
+                hidden_size = int(tensor.shape[1])
+                break
+
+        if hidden_size is None:
+            raise ValueError("Could not infer hidden size from checkpoint state_dict")
+
+        for model_size in ModelSize:
+            if model_size.value == (num_layers, hidden_size):
+                return model_size
+
+        raise ValueError(
+            "Checkpoint architecture does not match any known ModelSize: "
+            f"num_layers={num_layers}, hidden_size={hidden_size}"
+        )
+
+    @staticmethod
+    def _infer_regression_type_from_state_dict(
+        state_dict: Mapping[str, torch.Tensor],
+    ) -> str:
+        output_head = state_dict.get("output_head_reg.weight")
+        if output_head is None or output_head.ndim < 2:
+            return "l2"
+        return "l2" if int(output_head.shape[0]) == 1 else "reg-as-classif"
+
+    @staticmethod
+    def _infer_classification_type_from_state_dict(
+        state_dict: Mapping[str, torch.Tensor],
+    ) -> str:
+        if "cluster_dense.weight" in state_dict or "cluster_output_head.weight" in state_dict:
+            # The checkpoint structure distinguishes clustering heads from
+            # cross-entropy, but not clustering vs clustering-cosine.
+            return "clustering"
+        return "cross-entropy"
+
     def load_weights(
         self,
         checkpoint_path: Union[str, Path],
@@ -429,7 +550,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
         # Always stage checkpoint tensors through CPU so a failed load attempt does not
         # allocate CUDA memory repeatedly.
         del device
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        checkpoint = self._load_checkpoint(checkpoint_path)
         state_dict = self._normalize_state_dict_keys(
             self._extract_state_dict(checkpoint)
         )

@@ -44,7 +44,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
     """SAP_RPT_OSS_Estimator (sap-rpt-1-oss) class.
 
     Args:
-        checkpoint: path to the checkpoint file; must be of size base model size
+        checkpoint: path to the checkpoint file; supports plain RPT weights and Lightning `.ckpt`
         bagging: number of bagging iterations; if 1 there is no bagging. If 'auto', then:
             - There is no bagging if the number of samples is less than max_context_size - just use everything
             - Otherwise, the training data is split into chunks size max_context_size rows:
@@ -68,9 +68,28 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
     MAX_AUTO_BAGS = 16
     MAX_NUM_COLUMNS = 500
 
+    @staticmethod
+    def _normalize_model_size(
+        model_size: Optional[Union[ModelSize, str]],
+    ) -> Optional[ModelSize]:
+        if model_size is None:
+            return None
+        if isinstance(model_size, ModelSize):
+            return model_size
+        if model_size not in ModelSize.__members__:
+            raise ValueError(
+                f"{model_size} is not a valid model size: {list(ModelSize.__members__)}"
+            )
+        return ModelSize[model_size]
+
     def __init__(
         self,
         checkpoint: str = "2025-11-04_sap-rpt-one-oss.pt",
+        model_size: Optional[Union[ModelSize, str]] = None,
+        regression_type: Optional[Literal["reg-as-classif", "l2"]] = None,
+        classification_type: Optional[
+            Literal["cross-entropy", "clustering", "clustering-cosine"]
+        ] = None,
         bagging: Union[Literal["auto"], int] = 8,
         max_context_size: int = 8192,
         drop_constant_columns: bool = True,
@@ -78,10 +97,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         is_valid: bool = True,
     ):
 
-        self.model_size = ModelSize.base
         self.checkpoint = checkpoint
-        self.regression_type = "l2"
-        self.classification_type = "cross-entropy"
         self.test_chunk_size = test_chunk_size
         checkpoint_path = Path(checkpoint).expanduser()
         if checkpoint_path.exists():
@@ -90,6 +106,30 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
             self._checkpoint_path = hf_hub_download(
                 repo_id="SAP/sap-rpt-1-oss", filename=checkpoint
             )
+
+        self.model_size = self._normalize_model_size(model_size)
+        checkpoint_config = None
+        if (
+            self.model_size is None
+            or regression_type is None
+            or classification_type is None
+        ):
+            checkpoint_config = RPT.inspect_checkpoint(Path(self._checkpoint_path))
+
+        if self.model_size is None:
+            assert checkpoint_config is not None
+            self.model_size = checkpoint_config["model_size"]
+
+        self.regression_type = regression_type
+        if self.regression_type is None:
+            assert checkpoint_config is not None
+            self.regression_type = checkpoint_config["regression_type"]
+
+        self.classification_type = classification_type
+        if self.classification_type is None:
+            assert checkpoint_config is not None
+            self.classification_type = checkpoint_config["classification_type"]
+
         self.bagging = bagging
         if not isinstance(bagging, int) and bagging != "auto":
             raise ValueError('bagging must be an integer or "auto"')
