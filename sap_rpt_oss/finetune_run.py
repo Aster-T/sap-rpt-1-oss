@@ -158,7 +158,6 @@ def run_stage(
     output_root: Path,
     max_num_rows: int,
     max_steps: int,
-    max_epochs: int,
 ):
     output_root.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -219,12 +218,10 @@ def run_stage(
             save_model_weights(model, checkpoint_dir, stage_name, global_step)
             last_saved_step = global_step
 
-    for epoch_idx in range(max_epochs):
-        if global_step >= max_steps:
-            break
-
-        progress.set_description(f"{stage_name} epoch {epoch_idx + 1}/{max_epochs}")
+    while global_step < max_steps:
+        yielded_batch = False
         for batch in dataloader:
+            yielded_batch = True
             if global_step >= max_steps:
                 break
 
@@ -261,6 +258,10 @@ def run_stage(
 
         if 0 < pending_batches and global_step < max_steps:
             finish_optimizer_step()
+        if not yielded_batch:
+            raise RuntimeError(
+                f"No batches were yielded from training data root: {data_root}"
+            )
 
     if global_step != last_saved_step:
         save_model_weights(model, checkpoint_dir, stage_name, global_step)
@@ -292,7 +293,6 @@ def main():
         output_root=config.output_root_path,
         max_num_rows=config.stage1_max_num_rows,
         max_steps=config.max_steps,
-        max_epochs=config.max_epochs,
     )
 
     if config.use_curriculum_stage2:
@@ -304,7 +304,6 @@ def main():
             output_root=config.curriculum_stage2_output_root_path,
             max_num_rows=config.curriculum_stage2_max_num_rows,
             max_steps=config.curriculum_stage2_max_steps,
-            max_epochs=config.curriculum_stage2_max_epochs,
         )
 
 

@@ -18,7 +18,7 @@ class FinetuneConfig:
     learning_rate: float = 1e-4
     warmup_steps: int = 1000
 
-    # 论文中给出的训练规模是 400 万到 1000 万步，大致对应 2 到 5 轮训练。
+    # 手写 PyTorch 训练循环按 step 停止；max_epochs 保留仅为兼容旧配置，不参与停止条件。
     max_steps: int = 4_000_000
     max_epochs: int = 5
     micro_batch_size: int = 1
