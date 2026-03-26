@@ -61,6 +61,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
             layer_norm_eps=1e-5,
             type_vocab_size=1,
             hidden_dropout_prob=0.1,
+            Training=kwargs["training"] if "training" in kwargs else False,
         )
         self.regression_type = regression_type
         self.classification_type = classification_type
@@ -455,7 +456,10 @@ class RPT(nn.Module, ModuleUtilsMixin):
             hyper_regression_type = hyper_parameters.get("regression_type")
             if hyper_regression_type in {"l2", "reg-as-classif"}:
                 regression_type = hyper_regression_type
-            elif cls._infer_regression_type_from_state_dict(state_dict) == "reg-as-classif":
+            elif (
+                cls._infer_regression_type_from_state_dict(state_dict)
+                == "reg-as-classif"
+            ):
                 regression_type = "reg-as-classif"
         elif cls._infer_regression_type_from_state_dict(state_dict) == "reg-as-classif":
             regression_type = "reg-as-classif"
@@ -469,11 +473,17 @@ class RPT(nn.Module, ModuleUtilsMixin):
                 "clustering-cosine",
             }:
                 classification_type = hyper_classification_type
-            elif cls._infer_classification_type_from_state_dict(state_dict) != "cross-entropy":
+            elif (
+                cls._infer_classification_type_from_state_dict(state_dict)
+                != "cross-entropy"
+            ):
                 classification_type = cls._infer_classification_type_from_state_dict(
                     state_dict
                 )
-        elif cls._infer_classification_type_from_state_dict(state_dict) != "cross-entropy":
+        elif (
+            cls._infer_classification_type_from_state_dict(state_dict)
+            != "cross-entropy"
+        ):
             classification_type = cls._infer_classification_type_from_state_dict(
                 state_dict
             )
@@ -535,7 +545,10 @@ class RPT(nn.Module, ModuleUtilsMixin):
     def _infer_classification_type_from_state_dict(
         state_dict: Mapping[str, torch.Tensor],
     ) -> str:
-        if "cluster_dense.weight" in state_dict or "cluster_output_head.weight" in state_dict:
+        if (
+            "cluster_dense.weight" in state_dict
+            or "cluster_output_head.weight" in state_dict
+        ):
             # The checkpoint structure distinguishes clustering heads from
             # cross-entropy, but not clustering vs clustering-cosine.
             return "clustering"
