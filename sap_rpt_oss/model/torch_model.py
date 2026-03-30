@@ -680,7 +680,12 @@ class RPT(nn.Module, ModuleUtilsMixin):
         return test_preds, test_logits
 
     def forward(
-        self, data: dict[str, torch.Tensor], is_regression: bool, labels=None, **kwargs
+        self,
+        data: dict[str, torch.Tensor],
+        is_regression: bool,
+        labels=None,
+        get_attn_weight: bool = False,
+        **kwargs,
     ):
         input_embeds = self.embeddings(data, is_regression)
         # (max_num_rows, max_num_columns, hidden_size)
@@ -690,9 +695,19 @@ class RPT(nn.Module, ModuleUtilsMixin):
         )
         extended_attention_mask = extended_attention_mask.type(input_embeds.dtype)
 
-        if self.checkpointing_segments == 0:
+        attention_weights = [] if get_attn_weight else None
+
+        if get_attn_weight or self.checkpointing_segments == 0:
             for layer in self.in_context_encoder:
-                input_embeds = layer(input_embeds, extended_attention_mask)
+                if get_attn_weight:
+                    input_embeds, layer_attention_weights = layer(
+                        input_embeds,
+                        extended_attention_mask,
+                        get_attn_weight=True,
+                    )
+                    attention_weights.append(layer_attention_weights)
+                else:
+                    input_embeds = layer(input_embeds, extended_attention_mask)
             encoder_outputs = input_embeds
         else:
             # Remark: we need to bind `module` during creation time to avoid the issue that just doing
@@ -715,10 +730,15 @@ class RPT(nn.Module, ModuleUtilsMixin):
 
         target_column_output = encoder_outputs[:, -1]  # (num_rows, hidden_size)
 
-        return self.forward_heads(
+        outputs = self.forward_heads(
             target_column_output,
             is_regression,
             labels,
             data["target"],
             data["target_delta"],
         )
+        if get_attn_weight:
+            if isinstance(outputs, tuple):
+                return (*outputs, attention_weights)
+            return outputs, attention_weights
+        return outputs
