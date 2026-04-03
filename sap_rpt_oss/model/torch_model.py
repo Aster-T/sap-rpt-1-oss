@@ -61,7 +61,6 @@ class RPT(nn.Module, ModuleUtilsMixin):
             layer_norm_eps=1e-5,
             type_vocab_size=1,
             hidden_dropout_prob=0.1,
-            Training=kwargs["training"] if "training" in kwargs else False,
         )
         self.regression_type = regression_type
         self.classification_type = classification_type
