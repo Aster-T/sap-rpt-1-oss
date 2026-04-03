@@ -1,4 +1,3 @@
-import datetime
 from math import ceil
 from pathlib import Path
 from typing import Iterator, Optional, Union
@@ -7,14 +6,43 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
+from sap_rpt_oss.configs import TableRulesConfig
+from sap_rpt_oss.data.rules import (
+    exceeds_feature_limit,
+    filter_table_frames,
+    get_target_candidates,
+    is_eligible_target_column,
+)
 from sap_rpt_oss.data.tokenizer import Tokenizer
 
 
 class TableSkippedError(ValueError):
     pass
+
+
+def _resolve_table_rules(
+    table_rules: Optional[TableRulesConfig],
+    *,
+    drop_constant_columns: bool,
+    max_num_columns: int,
+    max_num_features: Optional[int],
+    min_num_rows: int,
+    numeric_nan_ratio_threshold: float = 0.5,
+    categorical_unique_ratio_threshold: float = 0.2,
+) -> TableRulesConfig:
+    if table_rules is not None:
+        return table_rules
+
+    return TableRulesConfig(
+        drop_constant_columns=drop_constant_columns,
+        max_num_columns=max_num_columns,
+        max_num_features=max_num_features,
+        min_num_rows=min_num_rows,
+        numeric_nan_ratio_threshold=numeric_nan_ratio_threshold,
+        categorical_unique_ratio_threshold=categorical_unique_ratio_threshold,
+    )
 
 
 class RPTTableDataset(Dataset):
@@ -34,12 +62,20 @@ class RPTTableDataset(Dataset):
         max_num_rows: Optional[int] = None,
         query_size_range: Optional[tuple[int, int]] = None,
         random_seed: int = 42,
+        table_rules: Optional[TableRulesConfig] = None,
     ):
         self.tokenizer = tokenizer
-        self.drop_constant_columns = drop_constant_columns
-        self.max_num_columns = max_num_columns
-        self.max_num_features = max_num_features
-        self.min_num_rows = min_num_rows
+        self.table_rules = _resolve_table_rules(
+            table_rules,
+            drop_constant_columns=drop_constant_columns,
+            max_num_columns=max_num_columns,
+            max_num_features=max_num_features,
+            min_num_rows=min_num_rows,
+        )
+        self.drop_constant_columns = self.table_rules.drop_constant_columns
+        self.max_num_columns = self.table_rules.max_num_columns
+        self.max_num_features = self.table_rules.max_num_features
+        self.min_num_rows = self.table_rules.min_num_rows
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
         self.random_seed = random_seed
@@ -130,33 +166,6 @@ class RPTTableDataset(Dataset):
             )
         return fit_rows
 
-    def _prepare_frames(
-        self,
-        fit_df: pd.DataFrame,
-        predict_df: pd.DataFrame,
-        target_column: str,
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        combined = pd.concat([fit_df, predict_df], ignore_index=True)
-
-        if self.drop_constant_columns:
-            features = combined.drop(columns=[target_column])
-            constant_columns = list(features.columns[features.nunique() == 1])
-            if constant_columns:
-                combined = combined.drop(columns=constant_columns)
-
-        if combined.shape[1] > self.max_num_columns:
-            features = combined.drop(columns=[target_column])
-            sampled_columns = features.sample(
-                n=self.max_num_columns - 1,
-                axis=1,
-                replace=False,
-                random_state=self.random_seed,
-            )
-            combined = pd.concat([sampled_columns, combined[[target_column]]], axis=1)
-
-        fit_rows = len(fit_df)
-        return combined.iloc[:fit_rows].copy(), combined.iloc[fit_rows:].copy()
-
     def _prepare_table(
         self,
         table: pd.DataFrame,
@@ -178,13 +187,12 @@ class RPTTableDataset(Dataset):
             target_column = str(table.columns[-1])
         if target_column not in table.columns:
             raise ValueError(f"target column '{target_column}' not found in the table")
-        if self.max_num_features is not None:
+        if exceeds_feature_limit(table, self.max_num_features):
             num_feature_columns = table.shape[1] - 1
-            if num_feature_columns > self.max_num_features:
-                raise TableSkippedError(
-                    f"table has {num_feature_columns} feature columns, "
-                    f"exceeds limit {self.max_num_features}"
-                )
+            raise TableSkippedError(
+                f"table has {num_feature_columns} feature columns, "
+                f"exceeds limit {self.max_num_features}"
+            )
 
         working_table = table.copy()
         if self.max_num_rows is not None and len(working_table) > self.max_num_rows:
@@ -201,7 +209,14 @@ class RPTTableDataset(Dataset):
         fit_rows = self._resolve_fit_rows(len(working_table), fit_size)
         fit_df = working_table.iloc[:fit_rows].copy()
         predict_df = working_table.iloc[fit_rows:].copy()
-        fit_df, predict_df = self._prepare_frames(fit_df, predict_df, target_column)
+        fit_df, predict_df = filter_table_frames(
+            fit_df,
+            predict_df,
+            target_column,
+            drop_constant_columns=self.drop_constant_columns,
+            max_num_columns=self.max_num_columns,
+            random_seed=self.random_seed,
+        )
 
         chunk_size = (
             len(predict_df) if predict_chunk_size is None else int(predict_chunk_size)
@@ -235,6 +250,7 @@ class RPTParquetDataset(IterableDataset):
         random_seed: int = 42,
         regression_keyword: str = "regression",
         streaming_read_batch_size: Optional[int] = None,
+        table_rules: Optional[TableRulesConfig] = None,
     ):
         self.root_dir = Path(root_dir).expanduser().resolve()
         if not self.root_dir.exists():
@@ -249,16 +265,29 @@ class RPTParquetDataset(IterableDataset):
         self.tokenizer = tokenizer
         self.predict_chunk_size = predict_chunk_size
         self.shuffle_table = shuffle_table
-        self.drop_constant_columns = drop_constant_columns
-        self.max_num_columns = max_num_columns
-        self.max_num_features = max_num_features
-        self.min_num_rows = min_num_rows
+        self.table_rules = _resolve_table_rules(
+            table_rules,
+            drop_constant_columns=drop_constant_columns,
+            max_num_columns=max_num_columns,
+            max_num_features=max_num_features,
+            min_num_rows=min_num_rows,
+            numeric_nan_ratio_threshold=numeric_nan_ratio_threshold,
+            categorical_unique_ratio_threshold=categorical_unique_ratio_threshold,
+        )
+        self.drop_constant_columns = self.table_rules.drop_constant_columns
+        self.max_num_columns = self.table_rules.max_num_columns
+        self.max_num_features = self.table_rules.max_num_features
+        self.min_num_rows = self.table_rules.min_num_rows
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
         self.auto_select_target = auto_select_target
         self.skip_ineligible_target = skip_ineligible_target
-        self.numeric_nan_ratio_threshold = numeric_nan_ratio_threshold
-        self.categorical_unique_ratio_threshold = categorical_unique_ratio_threshold
+        self.numeric_nan_ratio_threshold = (
+            self.table_rules.numeric_nan_ratio_threshold
+        )
+        self.categorical_unique_ratio_threshold = (
+            self.table_rules.categorical_unique_ratio_threshold
+        )
         self.balance_classification_tasks = balance_classification_tasks
         self.random_seed = random_seed
         self.regression_keyword = regression_keyword.lower()
@@ -271,11 +300,6 @@ class RPTParquetDataset(IterableDataset):
 
     def _infer_is_regression(self, parquet_path: Path) -> bool:
         return self.regression_keyword in parquet_path.as_posix().lower()
-
-    def _exceeds_feature_limit(self, table: pd.DataFrame) -> bool:
-        if self.max_num_features is None:
-            return False
-        return table.shape[1] - 1 > self.max_num_features
 
     def _resolve_streaming_read_batch_size(
         self, streaming_read_batch_size: Optional[int]
@@ -317,67 +341,6 @@ class RPTParquetDataset(IterableDataset):
             return table
         return None
 
-    @staticmethod
-    def _first_non_null_value(series: pd.Series):
-        non_null = series[series.notna()]
-        if non_null.empty:
-            return None
-        return non_null.iloc[0]
-
-    @classmethod
-    def _is_date_like_column(cls, series: pd.Series) -> bool:
-        dtype_str = str(series.dtype).lower()
-        if any(token in dtype_str for token in ("date", "time", "timestamp")):
-            return True
-
-        value = cls._first_non_null_value(series)
-        return isinstance(
-            value,
-            (datetime.date, datetime.time, datetime.datetime, pd.Timestamp),
-        )
-
-    @classmethod
-    def _is_numeric_column(cls, series: pd.Series) -> bool:
-        return is_numeric_dtype(series) and not is_bool_dtype(series)
-
-    def _get_target_candidates(
-        self, table: pd.DataFrame
-    ) -> tuple[list[str], list[str]]:
-        regression_candidates = []
-        classification_candidates = []
-        num_rows = max(len(table), 1)
-
-        for column_name in table.columns:
-            column = table[column_name]
-            if column.notna().sum() == 0:
-                continue
-            if self._is_date_like_column(column):
-                continue
-
-            if self._is_numeric_column(column):
-                if column.isna().mean() <= self.numeric_nan_ratio_threshold:
-                    regression_candidates.append(str(column_name))
-                continue
-
-            unique_ratio = column.nunique(dropna=True) / num_rows
-            if unique_ratio <= self.categorical_unique_ratio_threshold:
-                classification_candidates.append(str(column_name))
-
-        return regression_candidates, classification_candidates
-
-    def _is_eligible_target_column(
-        self,
-        table: pd.DataFrame,
-        target_column: str,
-        is_regression: bool,
-    ) -> bool:
-        regression_candidates, classification_candidates = self._get_target_candidates(
-            table
-        )
-        if is_regression:
-            return target_column in regression_candidates
-        return target_column in classification_candidates
-
     def _choose_target_column(self, candidates: list[str], seed: int) -> str:
         rng = np.random.default_rng(seed)
         return candidates[int(rng.integers(0, len(candidates)))]
@@ -392,11 +355,15 @@ class RPTParquetDataset(IterableDataset):
             table = self._read_probe_table(parquet_path)
             if table is None:
                 continue
-            if self._exceeds_feature_limit(table):
+            if exceeds_feature_limit(table, self.max_num_features):
                 continue
 
             regression_candidates, classification_candidates = (
-                self._get_target_candidates(table)
+                get_target_candidates(
+                    table,
+                    numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
+                    categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
+                )
             )
             if regression_candidates:
                 regression_specs.append(
@@ -462,6 +429,7 @@ class RPTParquetDataset(IterableDataset):
                 max_num_rows=self.max_num_rows,
                 query_size_range=self.query_size_range,
                 random_seed=seed,
+                table_rules=self.table_rules,
             )
         except TableSkippedError:
             return
@@ -493,10 +461,14 @@ class RPTParquetDataset(IterableDataset):
         seed_offset: int,
     ) -> Iterator[dict[str, object]]:
         for chunk_idx, table in self._iter_table_chunks(parquet_path):
-            if self._exceeds_feature_limit(table):
+            if exceeds_feature_limit(table, self.max_num_features):
                 continue
-            if self.skip_ineligible_target and not self._is_eligible_target_column(
-                table, target_column, is_regression
+            if self.skip_ineligible_target and not is_eligible_target_column(
+                table,
+                target_column,
+                is_regression,
+                numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
+                categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
             ):
                 continue
             yield from self._iter_batches_from_table(
@@ -531,7 +503,7 @@ class RPTParquetDataset(IterableDataset):
         else:
             for file_idx, parquet_path in enumerate(parquet_files):
                 for chunk_idx, table in self._iter_table_chunks(parquet_path):
-                    if self._exceeds_feature_limit(table):
+                    if exceeds_feature_limit(table, self.max_num_features):
                         continue
                     target_column = (
                         self.target_column
@@ -541,8 +513,12 @@ class RPTParquetDataset(IterableDataset):
                     is_regression = self._infer_is_regression(parquet_path)
                     if (
                         self.skip_ineligible_target
-                        and not self._is_eligible_target_column(
-                            table, target_column, is_regression
+                        and not is_eligible_target_column(
+                            table,
+                            target_column,
+                            is_regression,
+                            numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
+                            categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
                         )
                     ):
                         continue

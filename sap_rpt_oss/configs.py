@@ -1,8 +1,29 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 from sap_rpt_oss.constants import ModelSize
+
+
+@dataclass(slots=True)
+class TableRulesConfig:
+    """Rules for table filtering, feature pruning, and target selection."""
+
+    # Drop feature columns that are constant across the combined fit/predict rows.
+    drop_constant_columns: bool = True
+    # Single width limit for a table, including the target column.
+    max_num_columns: int = 50
+    # Minimum number of rows required for a table or parquet chunk to be used.
+    min_num_rows: int = 150
+    # Numeric columns with a NaN ratio above this are excluded from regression targets.
+    numeric_nan_ratio_threshold: float = 0.5
+    # Non-numeric columns with a unique-ratio above this are excluded from classification targets.
+    categorical_unique_ratio_threshold: float = 0.2
+
+    @property
+    def max_num_features(self) -> int:
+        # Internal compatibility alias: total columns minus the target column.
+        return max(0, self.max_num_columns - 1)
 
 
 @dataclass(slots=True)
@@ -19,40 +40,39 @@ class FinetuneConfig:
     warmup_steps: int = 1000
     training: bool = True
 
-    # 手写 PyTorch 训练循环按 step 停止；max_epochs 保留仅为兼容旧配置，不参与停止条件。
-    max_steps: int = 100_000
+    # Paper-style pretraining typically runs for 4M to 10M updates.
+    # This default uses the lower bound; raise it if you want the longer schedule.
+    max_steps: int = 4_000_000
     max_epochs: int = 5
     micro_batch_size: int = 1
-    # DataLoader worker 数；这个项目的数据预处理包含文本 embedding，默认用 0 更稳。
     num_workers: int = 0
-    # 有效 batch size = micro_batch_size * accumulate_grad_batches。
-    # 训练入口当前固定要求 micro_batch_size == 1，因此这里就是直接控制有效 batch size。
     accumulate_grad_batches: int | None = None
     gradient_clip_val: float = 1.0
     log_every_n_steps: int = 50
 
-    # 按论文描述整理的数据采样参数。
-    min_num_rows: int = 150
+    # Table filtering and target-selection rules aligned with the pretraining setup.
+    table_rules: TableRulesConfig = field(
+        default_factory=lambda: TableRulesConfig(
+            min_num_rows=150,
+        )
+    )
+
+    # Table sampling and loading.
     query_size_range: tuple[int, int] = (50, 900)
-    # 跳过特征列数量超过该阈值的表；不包含 target 列。
-    max_num_features: int | None = 50
     target_column: str | None = None
     predict_chunk_size: int | None = None
-    # 流式读取 parquet 时单次最多拉取的行数；为空时按采样规模自动推断。
     streaming_read_batch_size: int | None = None
     shuffle_table: bool = True
     regression_keyword: str = "regression"
     random_seed: int = 42
-    auto_select_target: bool = False
+    auto_select_target: bool = True
     skip_ineligible_target: bool = True
-    numeric_nan_ratio_threshold: float = 0.5
-    categorical_unique_ratio_threshold: float = 0.2
     balance_classification_tasks: bool = True
 
-    # 第一阶段：默认的 T4 预训练设置，单表最多采样 1000 行。
+    # Stage 1.
     stage1_max_num_rows: int = 1000
 
-    # 可选的课程学习第二阶段配置。
+    # Optional curriculum stage 2.
     curriculum_stage2_data_root_path: Path | None = None
     curriculum_stage2_output_root_path: Path = Path(
         "outputs/finetune/curriculum_stage2"

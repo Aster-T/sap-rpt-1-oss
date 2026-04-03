@@ -68,20 +68,15 @@ def build_dataloader(
         target_column=config.target_column,
         predict_chunk_size=config.predict_chunk_size,
         shuffle_table=config.shuffle_table,
-        drop_constant_columns=True,
-        max_num_columns=500,
-        max_num_features=config.max_num_features,
-        min_num_rows=config.min_num_rows,
         max_num_rows=max_num_rows,
         query_size_range=config.query_size_range,
         auto_select_target=config.auto_select_target,
         skip_ineligible_target=config.skip_ineligible_target,
-        numeric_nan_ratio_threshold=config.numeric_nan_ratio_threshold,
-        categorical_unique_ratio_threshold=config.categorical_unique_ratio_threshold,
         balance_classification_tasks=config.balance_classification_tasks,
         random_seed=config.random_seed,
         regression_keyword=config.regression_keyword,
         streaming_read_batch_size=config.streaming_read_batch_size,
+        table_rules=config.table_rules,
     )
 
     dataloader_kwargs = {
