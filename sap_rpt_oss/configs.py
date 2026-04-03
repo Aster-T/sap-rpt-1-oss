@@ -22,7 +22,6 @@ class TableRulesConfig:
 
     @property
     def max_num_features(self) -> int:
-        # Internal compatibility alias: total columns minus the target column.
         return max(0, self.max_num_columns - 1)
 
 
@@ -42,7 +41,7 @@ class FinetuneConfig:
 
     # Paper-style pretraining typically runs for 4M to 10M updates.
     # This default uses the lower bound; raise it if you want the longer schedule.
-    max_steps: int = 4_000_000
+    max_steps: int = 8_000_000
     max_epochs: int = 5
     micro_batch_size: int = 1
     num_workers: int = 0
