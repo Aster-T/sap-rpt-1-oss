@@ -29,7 +29,9 @@ class TableRulesConfig:
 class FinetuneConfig:
     data_root_path: Path = Path("datasets/t4/datas")
     output_root_path: Path = Path("outputs/finetune")
-    pretrained_checkpoint: str = "2025-11-04_sap-rpt-one-oss.pt"
+    # True: initialize model weights from scratch. False: load from resume_checkpoint_path.
+    pretrain_from_scratch: bool = False
+    # Checkpoint path used only when pretrain_from_scratch is False.
     resume_checkpoint_path: Path | None = None
     checkpoint_root_path: Path | None = None
     checkpoint_save_every_n_train_steps: int = 100

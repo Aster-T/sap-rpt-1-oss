@@ -1,11 +1,10 @@
 import random
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
@@ -32,27 +31,21 @@ def infer_autocast_dtype() -> Optional[torch.dtype]:
     return torch.bfloat16 if major >= 8 else torch.float16
 
 
-def resolve_checkpoint(
-    checkpoint: Optional[Union[str, Path]],
-) -> Optional[Path]:
-    if checkpoint is None:
-        return None
-
-    checkpoint_path = Path(checkpoint).expanduser()
-    if checkpoint_path.exists():
-        return checkpoint_path.resolve()
-
-    return Path(
-        hf_hub_download(repo_id="SAP/sap-rpt-1-oss", filename=str(checkpoint))
-    )
-
-
 def move_to_device(x, device: torch.device):
     if isinstance(x, torch.Tensor):
         return x.to(device)
     if isinstance(x, dict):
         return {k: move_to_device(v, device) for k, v in x.items()}
     return x
+
+
+def initialize_model_weights(model: RPT):
+    def reset_module_parameters(module):
+        reset_parameters = getattr(module, "reset_parameters", None)
+        if callable(reset_parameters):
+            reset_parameters()
+
+    model.apply(reset_module_parameters)
 
 
 def build_dataloader(
@@ -97,8 +90,14 @@ def build_model_and_tokenizer(
         regression_type="l2",
         classification_type="cross-entropy",
     )
-    if checkpoint is not None:
+    if config.pretrain_from_scratch:
+        initialize_model_weights(model)
+    elif checkpoint is not None:
         model.load_weights(checkpoint, device=torch.device("cpu"))
+    else:
+        raise ValueError(
+            "resume_checkpoint_path must be set when pretrain_from_scratch is False"
+        )
 
     tokenizer_device = (
         "cpu"
@@ -271,9 +270,9 @@ def main():
     if config.micro_batch_size != 1:
         raise ValueError("This training pipeline assumes a micro batch size of 1")
 
-    initial_checkpoint = config.resolved_resume_checkpoint_path
-    if initial_checkpoint is None:
-        initial_checkpoint = resolve_checkpoint(config.pretrained_checkpoint)
+    initial_checkpoint = None
+    if not config.pretrain_from_scratch:
+        initial_checkpoint = config.resolved_resume_checkpoint_path
 
     model, tokenizer = build_model_and_tokenizer(
         config=config,
