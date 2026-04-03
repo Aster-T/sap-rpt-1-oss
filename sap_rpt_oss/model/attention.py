@@ -21,8 +21,11 @@ class TwoDimensionalAttentionLayer(nn.Module):
         self.cross_row_layer = layer_class(config)
 
     def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        get_attn_weight: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
         hidden_states: shape (num_rows, num_columns, hidden_size)
         attention_mask: shape (num_rows, num_rows) and values 0 (attend) or -inf (do not attend).
@@ -38,6 +41,16 @@ class TwoDimensionalAttentionLayer(nn.Module):
         horizontal_outputs = torch.zeros_like(
             hidden_states, dtype=hidden_states.dtype, device=hidden_states.device
         )
+        horizontal_attn_weights = None
+        if get_attn_weight:
+            horizontal_attn_weights = hidden_states.new_zeros(
+                (
+                    num_rows,
+                    self.cross_column_layer.attention.self_attention.num_attention_heads,
+                    num_columns,
+                    num_columns,
+                )
+            )
         max_rows_per_batch = 8192
         col_fraction = 100.0 / float(num_columns)
         batch_step = int(max_rows_per_batch * col_fraction)
@@ -45,7 +58,13 @@ class TwoDimensionalAttentionLayer(nn.Module):
         for i in range(0, num_rows, batch_step):
             end_idx = i + batch_step
             chunk = hidden_states[i:end_idx, :, :]
-            chunk_output = self.cross_column_layer(chunk)[0]
+            if get_attn_weight:
+                chunk_output, chunk_attn = self.cross_column_layer(
+                    chunk, get_attn_weight=True
+                )
+                horizontal_attn_weights[i:end_idx] = chunk_attn
+            else:
+                chunk_output = self.cross_column_layer(chunk)[0]
             horizontal_outputs[i : i + batch_step] = chunk_output
 
         # horizontal_outputs has shape (num_rows, num_columns, hidden_size)
@@ -63,13 +82,36 @@ class TwoDimensionalAttentionLayer(nn.Module):
             dtype=horizontal_outputs.dtype,
             device=horizontal_outputs.device,
         )
+        vertical_attn_weights = None
+        if get_attn_weight:
+            vertical_attn_weights = horizontal_outputs.new_zeros(
+                (
+                    num_columns,
+                    self.cross_row_layer.attention.self_attention.num_attention_heads,
+                    num_rows,
+                    num_rows,
+                )
+            )
         for i in range(0, num_columns, batch_step):
             end_idx = i + batch_step
             chunk = horizontal_outputs[i:end_idx, :, :]
-            chunk_output = self.cross_row_layer(chunk, attention_mask)[0]
+            if get_attn_weight:
+                chunk_output, chunk_attn = self.cross_row_layer(
+                    chunk, attention_mask, get_attn_weight=True
+                )
+                vertical_attn_weights[i:end_idx] = chunk_attn
+            else:
+                chunk_output = self.cross_row_layer(chunk, attention_mask)[0]
             vertical_outputs[i : i + batch_step, :, :] = chunk_output
 
-        return vertical_outputs.transpose(0, 1).contiguous()
+        vertical_outputs = vertical_outputs.transpose(0, 1).contiguous()
+        if not get_attn_weight:
+            return vertical_outputs
+
+        return vertical_outputs, {
+            "cross_column": horizontal_attn_weights,
+            "cross_row": vertical_attn_weights,
+        }
 
 
 class TorchRobertaLayer(nn.Module):
@@ -84,11 +126,21 @@ class TorchRobertaLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.FloatTensor] = None,
-    ) -> Tuple[torch.Tensor]:
-        attention_output = self.attention(hidden_states, attention_mask)
+        get_attn_weight: bool = False,
+    ) -> Tuple[torch.Tensor] | tuple[torch.Tensor, torch.Tensor]:
+        attention_outputs = self.attention(
+            hidden_states, attention_mask, get_attn_weight
+        )
+        if get_attn_weight:
+            attention_output, attn_weight = attention_outputs
+        else:
+            attention_output = attention_outputs
         intermediate_output = self.intermediate(attention_output)
         # Return a tuple like the original RobertaLayer, though it's not very useful
-        return (self.output(intermediate_output, attention_output),)
+        layer_output = self.output(intermediate_output, attention_output)
+        if get_attn_weight:
+            return layer_output, attn_weight
+        return (layer_output,)
 
 
 class TorchAttention(nn.Module):
@@ -101,8 +153,14 @@ class TorchAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.FloatTensor] = None,
-    ) -> Tuple[torch.Tensor]:
-        self_outputs = self.self_attention(hidden_states, attention_mask)
+        get_attn_weight: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        self_outputs = self.self_attention(
+            hidden_states, attention_mask, get_attn_weight
+        )
+        if get_attn_weight:
+            attention_output, attn_weight = self_outputs
+            return self.output(attention_output, hidden_states), attn_weight
         return self.output(self_outputs, hidden_states)
 
 
@@ -142,8 +200,8 @@ class TorchSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.FloatTensor] = None,
-        attn_weight: bool = False,
-    ) -> torch.Tensor:
+        get_attn_weight: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         hidden_states: shape (batch_size, seq_len, hidden_size)
         attention_mask: shape (batch_size, seq_len, seq_len) or (batch_size, 1, seq_len, seq_len)
@@ -163,4 +221,13 @@ class TorchSelfAttention(nn.Module):
 
         context_layer = attn_output.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.config.hidden_size,)
+        if get_attn_weight:
+            attn_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+            attn_scores = attn_scores / (self.attention_head_size**0.5)
+            if attention_mask is not None:
+                attn_scores = attn_scores + attention_mask
+            attn_weight = torch.nn.functional.softmax(attn_scores.float(), dim=-1).to(
+                query_layer.dtype
+            )
+            return context_layer.view(new_context_layer_shape), attn_weight
         return context_layer.view(new_context_layer_shape)

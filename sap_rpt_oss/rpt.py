@@ -134,6 +134,7 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         if not isinstance(bagging, int) and bagging != "auto":
             raise ValueError('bagging must be an integer or "auto"')
         self.max_context_size = max_context_size
+        self.is_valid = is_valid
         self.num_regression_bins = 16
         self.model = RPT(
             self.model_size,
