@@ -9,15 +9,15 @@ from sap_rpt_oss.constants import ModelSize
 class TableRulesConfig:
     """Rules for table filtering, feature pruning, and target selection."""
 
-    # Drop feature columns that are constant across the combined fit/predict rows.
+    # 去掉唯一值列
     drop_constant_columns: bool = True
-    # Single width limit for a table, including the target column.
+    # 最大特征数
     max_num_columns: int = 50
-    # Minimum number of rows required for a table or parquet chunk to be used.
+    # 最小行数
     min_num_rows: int = 150
-    # Numeric columns with a NaN ratio above this are excluded from regression targets.
+    # 缺失值超过这个比例的数值列跳过
     numeric_nan_ratio_threshold: float = 0.5
-    # Non-numeric columns with a unique-ratio above this are excluded from classification targets.
+    # 非数值列中唯一值超过这个比例的列跳过
     categorical_unique_ratio_threshold: float = 0.2
 
     @property
@@ -28,7 +28,7 @@ class TableRulesConfig:
 
 @dataclass(slots=True)
 class FinetuneConfig:
-    data_root_path: Path = Path("datasets/t4/data_d")
+    data_root_path: Path = Path("datasets/t4/datas")
     output_root_path: Path = Path("outputs/finetune")
     pretrained_checkpoint: str = "2025-11-04_sap-rpt-one-oss.pt"
     resume_checkpoint_path: Path | None = None
