@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from sap_rpt_oss.configs import FINETUNE_CONFIG, FinetuneConfig
-from sap_rpt_oss.data.ds import RPTParquetDataset
+from sap_rpt_oss.data.ds import MixedRPTDataset, RPTParquetDataset
 from sap_rpt_oss.data.tokenizer import Tokenizer
 from sap_rpt_oss.model.torch_model import RPT
 
@@ -48,13 +48,13 @@ def initialize_model_weights(model: RPT):
     model.apply(reset_module_parameters)
 
 
-def build_dataloader(
+def _build_single_dataset(
     config: FinetuneConfig,
     tokenizer: Tokenizer,
     data_root: Path,
     max_num_rows: int,
-) -> DataLoader:
-    dataset = RPTParquetDataset(
+) -> RPTParquetDataset:
+    return RPTParquetDataset(
         root_dir=data_root,
         fit_size=None,
         tokenizer=tokenizer,
@@ -72,6 +72,27 @@ def build_dataloader(
         table_rules=config.table_rules,
     )
 
+
+def build_dataloader(
+    config: FinetuneConfig,
+    tokenizer: Tokenizer,
+    data_root: Path,
+    max_num_rows: int,
+    secondary_data_root: Optional[Path] = None,
+    mixing_ratio: float = 0.8,
+) -> DataLoader:
+    dataset = _build_single_dataset(config, tokenizer, data_root, max_num_rows)
+    if secondary_data_root is not None:
+        secondary = _build_single_dataset(
+            config, tokenizer, secondary_data_root, max_num_rows
+        )
+        dataset = MixedRPTDataset(
+            primary=dataset,
+            secondary=secondary,
+            mixing_ratio=mixing_ratio,
+            random_seed=config.random_seed,
+        )
+
     dataloader_kwargs = {
         "batch_size": None,
         "num_workers": config.num_workers,
@@ -85,20 +106,6 @@ def build_model_and_tokenizer(
     config: FinetuneConfig,
     checkpoint: Optional[Path],
 ):
-    model = RPT(
-        model_size=config.model_size,
-        regression_type="l2",
-        classification_type="cross-entropy",
-    )
-    if config.pretrain_from_scratch:
-        initialize_model_weights(model)
-    elif checkpoint is not None:
-        model.load_weights(checkpoint, device=torch.device("cpu"))
-    else:
-        raise ValueError(
-            "resume_checkpoint_path must be set when pretrain_from_scratch is False"
-        )
-
     tokenizer_device = (
         "cpu"
         if config.num_workers > 0
@@ -109,10 +116,31 @@ def build_model_and_tokenizer(
         classification_type="cross-entropy",
         random_seed=config.random_seed,
         num_regression_bins=16,
-        is_valid=True,
+        clip_quantile=0.02,  # paper Section 3.1 — pretraining uses 2/98 quantile clipping
+        sentence_embedding_model_name=config.sentence_embedding_model_name,
         sentence_embedder_device=tokenizer_device,
         verbose=False,
     )
+
+    model = RPT(
+        model_size=config.model_size,
+        regression_type="l2",
+        classification_type="cross-entropy",
+        weight_sharing=config.weight_sharing,
+        combination_type=config.combination_type,
+        use_weekday=config.use_weekday,
+        sentence_embedding_dim=tokenizer.embedding_dim,
+        verbose=True,
+    )
+    if config.pretrain_from_scratch:
+        initialize_model_weights(model)
+    elif checkpoint is not None:
+        model.load_weights(checkpoint, device=torch.device("cpu"))
+    else:
+        raise ValueError(
+            "resume_checkpoint_path must be set when pretrain_from_scratch is False"
+        )
+
     return model, tokenizer
 
 
@@ -152,6 +180,8 @@ def run_stage(
     output_root: Path,
     max_num_rows: int,
     max_steps: int,
+    secondary_data_root: Optional[Path] = None,
+    mixing_ratio: float = 0.8,
 ):
     output_root.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -165,6 +195,8 @@ def run_stage(
         tokenizer=tokenizer,
         data_root=data_root,
         max_num_rows=max_num_rows,
+        secondary_data_root=secondary_data_root,
+        mixing_ratio=mixing_ratio,
     )
     optimizer, scheduler = build_optimizer_and_scheduler(model, config)
     model.to(device)
@@ -290,14 +322,26 @@ def main():
     )
 
     if config.use_curriculum_stage2:
+        # Paper Appendix A.4 mixes T4 (80%) with the Ma et al. data (20%) in
+        # stage 2. Primary stream is T4 (defaults to the stage-1 data root if
+        # curriculum_stage2_t4_data_root_path is unset), secondary is Ma et al.
+        # (curriculum_stage2_data_root_path).
+        t4_root = Path(
+            config.curriculum_stage2_t4_data_root_path
+            if config.curriculum_stage2_t4_data_root_path is not None
+            else config.data_root_path
+        )
+        ma_root = Path(config.curriculum_stage2_data_root_path)
         run_stage(
             config=config,
             model=model,
             tokenizer=tokenizer,
-            data_root=Path(config.curriculum_stage2_data_root_path),
+            data_root=t4_root,
             output_root=config.curriculum_stage2_output_root_path,
             max_num_rows=config.curriculum_stage2_max_num_rows,
             max_steps=config.curriculum_stage2_max_steps,
+            secondary_data_root=ma_root,
+            mixing_ratio=config.curriculum_stage2_mixing_ratio,
         )
 
 

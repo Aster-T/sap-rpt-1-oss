@@ -155,12 +155,16 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         self.model.load_weights(Path(self._checkpoint_path), self.device)
         self.seed = 42
         self.drop_constant_columns = drop_constant_columns
+        # Inference uses tighter outlier clipping (0.5%/99.5%) than pretraining
+        # (paper Section 4.1, "selected based on outlier analysis on downstream
+        # tasks"). is_valid kept for backward-compat as the public arg.
+        clip_quantile = 0.005 if is_valid else 0.02
         self.tokenizer = Tokenizer(
             regression_type=self.regression_type,
             classification_type=self.classification_type,
             random_seed=self.seed,
             num_regression_bins=self.num_regression_bins,
-            is_valid=is_valid,
+            clip_quantile=clip_quantile,
         )
         self.model.to(self.device).eval()
 

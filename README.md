@@ -113,6 +113,31 @@ print("R² Score:", r2)
 
 
 
+## Reproducing the ablation experiments
+
+Three ablation configurations are wired up via `sap_rpt_oss/run_experiment.py`:
+
+| Exp | Sentence embedder | Embedding fusion | Training | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | `sentence-transformers/all-MiniLM-L6-v2` | FiLM | Post-training from official HF checkpoint | Isolates the effect of FiLM vs sum |
+| 2 | `Qwen/Qwen3-Embedding-0.6B` | sum (paper default) | From-scratch on T4 | Isolates the effect of a stronger sentence embedder |
+| 3 | `Qwen/Qwen3-Embedding-0.6B` | FiLM | From-scratch on T4 | Combined effect |
+
+```bash
+# Exp 1: MiniLM-L6 + FiLM, post-training from official HF checkpoint
+python -m sap_rpt_oss.run_experiment --exp 1
+
+# Exp 2: Qwen3-Embedding-0.6B + sum, from scratch on T4
+LRU_CACHE_SIZE=10000000 python -m sap_rpt_oss.run_experiment --exp 2
+
+# Exp 3: Qwen3-Embedding-0.6B + FiLM, from scratch on T4
+LRU_CACHE_SIZE=10000000 python -m sap_rpt_oss.run_experiment --exp 3
+```
+
+Use `--max-steps 10` for a quick dry-run. `LRU_CACHE_SIZE=10000000` is required
+for Exp 2/3 because Qwen3 embeddings are ~30× more expensive than MiniLM and
+T4 has heavy column-name / categorical-value reuse.
+
 ## Known Issues
 No known issues
 

@@ -20,6 +20,10 @@ class SentenceEmbedder:
         )
         self.batch_size = batch_size
         self.tokenizer = AutoTokenizer.from_pretrained(sentence_embedding_model_name)
+        if self.pooling_method == "last_token":
+            # Qwen3-Embedding officially recommends left-padding so that the last
+            # position always corresponds to the final non-pad token.
+            self.tokenizer.padding_side = "left"
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
@@ -50,6 +54,14 @@ class SentenceEmbedder:
             return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
                 input_mask_expanded.sum(1), min=1e-9
             )
+        if self.pooling_method == "last_token":
+            if self.tokenizer.padding_side == "left":
+                return token_embeddings[:, -1].type(token_embeddings.dtype)
+            seq_lengths = attention_mask.sum(dim=1) - 1
+            batch_size = token_embeddings.size(0)
+            return token_embeddings[
+                torch.arange(batch_size, device=token_embeddings.device), seq_lengths
+            ].type(token_embeddings.dtype)
         assert self.pooling_method == "cls"
         return token_embeddings[:, 0].type(token_embeddings.dtype)
 

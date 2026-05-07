@@ -4,6 +4,7 @@
 
 import datetime
 import os
+import warnings
 from typing import Collection, Literal, Optional, Union
 
 import numpy as np
@@ -19,12 +20,17 @@ from sap_rpt_oss.constants import (
 from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
 from sap_rpt_oss.utils.lru_cache import LRU_Cache
 
+DEFAULT_SENTENCE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
 
 class Tokenizer:
     QUANTILE_DIMENSION = QUANTILE_DIMENSION_DEFAULT
-    sentence_embedding_model_name = "sentence-transformers/all-MiniLM-L12-v2"
+    # Kept for backwards-compatibility with older external code that reads the
+    # class attribute. The instance attribute (set in __init__) is the source
+    # of truth.
+    sentence_embedding_model_name = DEFAULT_SENTENCE_EMBEDDING_MODEL
     embedding_dim = embedding_model_to_dimension_and_pooling[
-        sentence_embedding_model_name
+        DEFAULT_SENTENCE_EMBEDDING_MODEL
     ][0]
 
     def __init__(
@@ -35,7 +41,9 @@ class Tokenizer:
         ] = "cross-entropy",
         num_regression_bins=16,
         random_seed=None,
-        is_valid=False,
+        is_valid: Optional[bool] = None,
+        clip_quantile: float = 0.02,
+        sentence_embedding_model_name: str = DEFAULT_SENTENCE_EMBEDDING_MODEL,
         sentence_embedder_device: Optional[Union[str, torch.device]] = None,
         verbose: bool = True,
     ):
@@ -43,8 +51,33 @@ class Tokenizer:
         self.classification_type = classification_type
         self.random_seed = random_seed
         self.num_regression_bins = num_regression_bins
-        self.is_valid = is_valid
         self.verbose = verbose
+
+        if is_valid is not None:
+            warnings.warn(
+                "Tokenizer(is_valid=...) is deprecated; pass clip_quantile instead. "
+                "is_valid=True is equivalent to clip_quantile=0.005 and "
+                "is_valid=False to clip_quantile=0.02.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            clip_quantile = 0.005 if is_valid else 0.02
+        self.is_valid = bool(is_valid) if is_valid is not None else False
+        if not 0.0 <= clip_quantile < 0.5:
+            raise ValueError(
+                f"clip_quantile must be in [0, 0.5); got {clip_quantile}"
+            )
+        self.clip_quantile = float(clip_quantile)
+
+        if sentence_embedding_model_name not in embedding_model_to_dimension_and_pooling:
+            raise ValueError(
+                f"Unknown sentence embedding model: {sentence_embedding_model_name}. "
+                f"Known models: {list(embedding_model_to_dimension_and_pooling)}"
+            )
+        self.sentence_embedding_model_name = sentence_embedding_model_name
+        self.embedding_dim = embedding_model_to_dimension_and_pooling[
+            sentence_embedding_model_name
+        ][0]
 
         self.sentence_embedder = SentenceEmbedder(
             self.sentence_embedding_model_name,
@@ -108,12 +141,10 @@ class Tokenizer:
             labels = np.zeros(total_rows, dtype=np.float32)
             return labels, torch.tensor(0.0), torch.tensor(1.0)
 
-        if self.is_valid:
-            # remove outliers below 0.5th percentile and above 99.5th percentile
-            vmin, vmax = np.nanquantile(train_data, [0.005, 0.995])
-        else:
-            # remove outliers below 2th percentile and above 98th percentile
-            vmin, vmax = np.nanpercentile(train_data, [2, 98])
+        # Clip outliers between [clip_quantile, 1 - clip_quantile] (paper Section 3.1
+        # uses 2% / 98% for pretraining; inference path uses 0.5% / 99.5%).
+        q_lo, q_hi = self.clip_quantile, 1.0 - self.clip_quantile
+        vmin, vmax = np.nanquantile(train_data, [q_lo, q_hi])
         train_data = np.clip(train_data, vmin, vmax)
         test_data = np.clip(test_data, vmin, vmax)
 

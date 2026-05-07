@@ -49,6 +49,11 @@ class RPT(nn.Module, ModuleUtilsMixin):
             "cross-entropy", "clustering", "clustering-cosine"
         ] = "cross-entropy",
         checkpointing_segments=1,
+        weight_sharing: bool = True,
+        combination_type: Literal["sum", "film"] = "sum",
+        use_weekday: bool = False,
+        sentence_embedding_dim: int = 384,
+        verbose: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -64,6 +69,10 @@ class RPT(nn.Module, ModuleUtilsMixin):
         )
         self.regression_type = regression_type
         self.classification_type = classification_type
+        self.weight_sharing = weight_sharing
+        self.combination_type = combination_type
+        self.use_weekday = use_weekday
+        self.sentence_embedding_dim = sentence_embedding_dim
         max_number_of_labels = Tokenizer.QUANTILE_DIMENSION
 
         if self.classification_type in ["clustering", "clustering-cosine"]:
@@ -99,13 +108,34 @@ class RPT(nn.Module, ModuleUtilsMixin):
             self.config,
             regression_type=regression_type,
             is_target_content_mapping=(classification_type != "cross-entropy"),
+            sentence_embedding_dim=sentence_embedding_dim,
+            combination_type=combination_type,
+            use_weekday=use_weekday,
         )
-        self.in_context_encoder = nn.ModuleList(
-            [
-                TwoDimensionalAttentionLayer(self.config)
-                for _ in range(self.config.num_hidden_layers)
-            ]
-        )
+        if weight_sharing:
+            shared_layer = TwoDimensionalAttentionLayer(self.config)
+            # ModuleList with repeated references — PyTorch correctly shares
+            # parameters across all positions, so the in-context encoder is a
+            # single physical layer applied num_hidden_layers times.
+            self.in_context_encoder = nn.ModuleList(
+                [shared_layer] * self.config.num_hidden_layers
+            )
+        else:
+            self.in_context_encoder = nn.ModuleList(
+                [
+                    TwoDimensionalAttentionLayer(self.config)
+                    for _ in range(self.config.num_hidden_layers)
+                ]
+            )
+
+        if verbose:
+            trainable = sum(
+                p.numel() for p in self.parameters() if p.requires_grad
+            )
+            print(
+                f"[RPT] weight_sharing={weight_sharing} combination_type={combination_type} "
+                f"trainable_params={trainable:,}"
+            )
 
     @staticmethod
     def build_context_attention_mask(data, device):
@@ -567,8 +597,26 @@ class RPT(nn.Module, ModuleUtilsMixin):
             self._extract_state_dict(checkpoint)
         )
 
+        # In FiLM mode the checkpoint may have been trained with combination_type="sum"
+        # and so will not contain `embeddings.film.*` keys. We accept missing keys
+        # only for the FiLM module — anything else is still a real load error.
+        is_film = getattr(self, "combination_type", "sum") == "film"
+
+        def _load(sd):
+            if is_film:
+                missing, unexpected = self.load_state_dict(sd, strict=False)
+                non_film_missing = [k for k in missing if not k.startswith("embeddings.film.")]
+                if non_film_missing or unexpected:
+                    raise RuntimeError(
+                        f"strict=False load failed beyond FiLM: missing={non_film_missing}, "
+                        f"unexpected={list(unexpected)}"
+                    )
+                print("FiLM parameters initialized from scratch (not in checkpoint).")
+            else:
+                self.load_state_dict(sd)
+
         try:
-            self.load_state_dict(state_dict)
+            _load(state_dict)
             return
         except RuntimeError as load_error:
             if not is_copy_last_layer:
@@ -578,7 +626,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
 
         copied_state_dict = self.copy_last_layer_weights_to_all(dict(state_dict))
         try:
-            self.load_state_dict(copied_state_dict)
+            _load(copied_state_dict)
         except RuntimeError as copied_load_error:
             raise RuntimeError(
                 "Failed to load weights after normalizing checkpoint keys and "

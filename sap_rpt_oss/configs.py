@@ -1,18 +1,25 @@
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from sap_rpt_oss.constants import ModelSize
+from sap_rpt_oss.constants import (
+    ModelSize,
+    embedding_model_to_dimension_and_pooling,
+)
 
 
-@dataclass(slots=True)
+# Task 8 uses dataclasses.replace on FinetuneConfig; slots=True can interact
+# poorly with replace + nested default_factory in some configurations, so we
+# keep the dataclasses without slots for forward-compatibility.
+@dataclass
 class TableRulesConfig:
     """Rules for table filtering, feature pruning, and target selection."""
 
     # 去掉唯一值列
     drop_constant_columns: bool = True
-    # 最大特征数
-    max_num_columns: int = 50
+    # 最大特征数（与推理侧 MAX_NUM_COLUMNS 对齐，论文 Section 4.1 末段）
+    max_num_columns: int = 500
     # 最小行数
     min_num_rows: int = 150
     # 缺失值超过这个比例的数值列跳过
@@ -25,7 +32,7 @@ class TableRulesConfig:
         return max(0, self.max_num_columns - 1)
 
 
-@dataclass(slots=True)
+@dataclass
 class FinetuneConfig:
     data_root_path: Path = Path("datasets/t4/datas")
     output_root_path: Path = Path("outputs/finetune")
@@ -51,10 +58,17 @@ class FinetuneConfig:
     gradient_clip_val: float = 1.0
     log_every_n_steps: int = 50
 
+    # Architecture toggles (paper-aligned defaults).
+    weight_sharing: bool = True
+    combination_type: str = "sum"  # "sum" (paper) or "film" (Exp 1/3 ablation)
+    use_weekday: bool = False  # paper does not use weekday in date encoding
+    sentence_embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+
     # Table filtering and target-selection rules aligned with the pretraining setup.
     table_rules: TableRulesConfig = field(
         default_factory=lambda: TableRulesConfig(
             min_num_rows=150,
+            max_num_columns=500,
         )
     )
 
@@ -75,6 +89,11 @@ class FinetuneConfig:
 
     # Optional curriculum stage 2.
     curriculum_stage2_data_root_path: Path | None = None
+    # If set, stage 2 mixes T4 (curriculum_stage2_t4_data_root_path) and the Ma et al.
+    # data via Bernoulli sampling with p=curriculum_stage2_mixing_ratio (T4 share).
+    # When None, stage 2 falls back to a single source (curriculum_stage2_data_root_path).
+    curriculum_stage2_t4_data_root_path: Path | None = None
+    curriculum_stage2_mixing_ratio: float = 0.8
     curriculum_stage2_output_root_path: Path = Path(
         "outputs/finetune/curriculum_stage2"
     )
@@ -112,8 +131,14 @@ class FinetuneConfig:
     def use_curriculum_stage2(self) -> bool:
         return self.curriculum_stage2_data_root_path is not None
 
+    @property
+    def sentence_embedding_dim(self) -> int:
+        return embedding_model_to_dimension_and_pooling[
+            self.sentence_embedding_model_name
+        ][0]
 
-@dataclass(slots=True)
+
+@dataclass
 class InferenceConfigs:
     checkpoints_path: Path = Path("checkpoints")
     input_root_path: Path = Path("datasets")
@@ -122,3 +147,71 @@ class InferenceConfigs:
 
 FINETUNE_CONFIG = FinetuneConfig()
 INFERENCE_CONFIG = InferenceConfigs()
+
+
+# ----------------------------------------------------------------------------
+# Task 8 — three-experiment ablation factories
+# ----------------------------------------------------------------------------
+def get_paper_aligned_pretrain_config() -> FinetuneConfig:
+    """ConTextTab paper base configuration: MiniLM-L6 + sum + from-scratch."""
+    return FinetuneConfig(
+        pretrain_from_scratch=True,
+        model_size=ModelSize.base,
+        weight_sharing=True,
+        sentence_embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
+        combination_type="sum",
+        use_weekday=False,
+        learning_rate=1e-4,
+        warmup_steps=1000,
+        gradient_clip_val=1.0,
+        max_steps=8_000_000,
+        accumulate_grad_batches=256,
+        stage1_max_num_rows=1000,
+        query_size_range=(50, 900),
+        balance_classification_tasks=True,
+        table_rules=TableRulesConfig(
+            min_num_rows=150,
+            max_num_columns=500,
+            numeric_nan_ratio_threshold=0.5,
+            categorical_unique_ratio_threshold=0.2,
+            drop_constant_columns=True,
+        ),
+    )
+
+
+def get_exp1_minilm_film_config() -> FinetuneConfig:
+    """Exp 1: MiniLM-L6 + FiLM, post-training from official HF checkpoint."""
+    cfg = get_paper_aligned_pretrain_config()
+    return dataclasses.replace(
+        cfg,
+        pretrain_from_scratch=False,
+        resume_checkpoint_path=None,  # downloaded inside run_experiment.py
+        combination_type="film",
+        max_steps=200_000,
+        warmup_steps=2_000,
+        learning_rate=1e-4,
+        output_root_path=Path("outputs/exp1_minilm_film"),
+        checkpoint_root_path=Path("checkpoints/exp1_minilm_film"),
+    )
+
+
+def get_exp2_qwen3_sum_config() -> FinetuneConfig:
+    """Exp 2: Qwen3-Embedding-0.6B + sum, T4 from-scratch pretraining."""
+    cfg = get_paper_aligned_pretrain_config()
+    return dataclasses.replace(
+        cfg,
+        sentence_embedding_model_name="Qwen/Qwen3-Embedding-0.6B",
+        combination_type="sum",
+        output_root_path=Path("outputs/exp2_qwen3_sum"),
+        checkpoint_root_path=Path("checkpoints/exp2_qwen3_sum"),
+    )
+
+
+def get_exp3_qwen3_film_config() -> FinetuneConfig:
+    """Exp 3: Qwen3-Embedding-0.6B + FiLM, T4 from-scratch pretraining."""
+    return dataclasses.replace(
+        get_exp2_qwen3_sum_config(),
+        combination_type="film",
+        output_root_path=Path("outputs/exp3_qwen3_film"),
+        checkpoint_root_path=Path("checkpoints/exp3_qwen3_film"),
+    )

@@ -154,3 +154,6 @@ outputs/
 gen_data/
 checkpoints/
 test/
+
+# papers
+papers/

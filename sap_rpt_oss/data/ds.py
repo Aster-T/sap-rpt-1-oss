@@ -534,3 +534,48 @@ class RPTParquetDataset(IterableDataset):
 
         if not yielded_any and worker_info is None:
             raise ValueError(f"no eligible parquet tables found under {self.root_dir}")
+
+
+class MixedRPTDataset(IterableDataset):
+    """Bernoulli-mix two RPTParquetDataset streams.
+
+    Each draw selects the primary dataset with probability `mixing_ratio`,
+    otherwise the secondary. Used for paper Appendix A.4 stage-2 curriculum
+    where T4 contributes 80% and the Ma et al. data 20%.
+    """
+
+    def __init__(
+        self,
+        primary: "RPTParquetDataset",
+        secondary: "RPTParquetDataset",
+        mixing_ratio: float = 0.8,
+        random_seed: int = 42,
+    ):
+        super().__init__()
+        if not 0.0 <= mixing_ratio <= 1.0:
+            raise ValueError(
+                f"mixing_ratio must be in [0, 1]; got {mixing_ratio}"
+            )
+        self.primary = primary
+        self.secondary = secondary
+        self.mixing_ratio = float(mixing_ratio)
+        self.random_seed = random_seed
+
+    def __iter__(self) -> Iterator[dict[str, object]]:
+        rng = np.random.default_rng(self.random_seed)
+        it_primary = iter(self.primary)
+        it_secondary = iter(self.secondary)
+        while True:
+            pick_primary = rng.random() < self.mixing_ratio
+            try:
+                if pick_primary:
+                    yield next(it_primary)
+                else:
+                    yield next(it_secondary)
+            except StopIteration:
+                # fall back to the other stream so training does not stall when
+                # one dataset finishes first
+                try:
+                    yield next(it_secondary if pick_primary else it_primary)
+                except StopIteration:
+                    return

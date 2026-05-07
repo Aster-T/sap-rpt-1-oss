@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Literal
+from typing import Dict, Literal, Optional
 
 import torch
 from torch import nn
@@ -11,21 +11,49 @@ from sap_rpt_oss.data.tokenizer import Tokenizer
 
 
 class DateEmbeddings(nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, use_weekday: bool = False):
         super().__init__()
         self.year_embeddings = nn.Embedding(52, hidden_size)
         self.month_embeddings = nn.Embedding(13, hidden_size)
         self.day_embeddings = nn.Embedding(32, hidden_size)
+        # weekday_embeddings is always constructed (so checkpoints stay loadable),
+        # but only contributes to the forward pass when use_weekday=True.
         self.weekday_embeddings = nn.Embedding(8, hidden_size)
+        self.use_weekday = use_weekday
 
     def forward(self, date_year_month_day_weekday):
         # date_year_month_day_weekday has shape (num_rows, num_cols, 4)
         year_embeds = self.year_embeddings(date_year_month_day_weekday[:, :, 0])
         month_embeds = self.month_embeddings(date_year_month_day_weekday[:, :, 1])
         day_embeds = self.day_embeddings(date_year_month_day_weekday[:, :, 2])
-        weekday_embeds = self.weekday_embeddings(date_year_month_day_weekday[:, :, 3])
+        out = year_embeds + month_embeds + day_embeds
+        if self.use_weekday:
+            out = out + self.weekday_embeddings(date_year_month_day_weekday[:, :, 3])
+        return out
 
-        return year_embeds + month_embeds + day_embeds + weekday_embeds
+
+class FiLMGenerator(nn.Module):
+    """Generates per-column (gamma, beta) from column header embeddings.
+
+    Zero-init on proj2 ensures gamma starts at 1 and beta at 0, so the FiLM
+    output equals the unmodulated cell sum at initialization. Combined with
+    additively reattaching column_embeds in CellEmbeddings.forward, this gives
+    a forward pass strictly equivalent to combination_type="sum" at init time
+    so post-training from a sum-trained checkpoint starts from a smooth point.
+    """
+
+    def __init__(self, hidden_size: int):
+        super().__init__()
+        self.proj1 = nn.Linear(hidden_size, hidden_size)
+        self.proj2 = nn.Linear(hidden_size, 2 * hidden_size)
+        nn.init.zeros_(self.proj2.weight)
+        nn.init.zeros_(self.proj2.bias)
+
+    def forward(self, column_embeds):
+        h = torch.nn.functional.gelu(self.proj1(column_embeds))
+        gamma_beta = self.proj2(h)
+        gamma, beta = gamma_beta.chunk(2, dim=-1)
+        return 1.0 + gamma, beta
 
 
 class CellEmbeddings(nn.Module):
@@ -45,9 +73,17 @@ class CellEmbeddings(nn.Module):
         config,
         regression_type: Literal["reg-as-classif", "l2"] = "reg-as-classif",
         is_target_content_mapping: bool = False,
+        sentence_embedding_dim: Optional[int] = None,
+        combination_type: Literal["sum", "film"] = "sum",
+        use_weekday: bool = False,
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
+        if sentence_embedding_dim is None:
+            sentence_embedding_dim = Tokenizer.embedding_dim
+        self.sentence_embedding_dim = sentence_embedding_dim
+        self.combination_type = combination_type
+
         if regression_type == "l2":
             self.number_embeddings = nn.Linear(1, config.hidden_size)
         else:
@@ -69,14 +105,17 @@ class CellEmbeddings(nn.Module):
             Tokenizer.QUANTILE_DIMENSION, config.hidden_size
         )
 
-        self.date_embeddings = DateEmbeddings(config.hidden_size)
+        self.date_embeddings = DateEmbeddings(config.hidden_size, use_weekday=use_weekday)
 
-        self.column_remapping = nn.Linear(Tokenizer.embedding_dim, config.hidden_size)
-        self.content_remapping = nn.Linear(Tokenizer.embedding_dim, config.hidden_size)
+        self.column_remapping = nn.Linear(sentence_embedding_dim, config.hidden_size)
+        self.content_remapping = nn.Linear(sentence_embedding_dim, config.hidden_size)
         if self.is_target_content_mapping:
             self.target_content_remapping = nn.Linear(
-                Tokenizer.embedding_dim, config.hidden_size
+                sentence_embedding_dim, config.hidden_size
             )
+
+        if self.combination_type == "film":
+            self.film = FiLMGenerator(config.hidden_size)
 
         self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -153,7 +192,17 @@ class CellEmbeddings(nn.Module):
                 0  # zero out to remove bias from `content_remapping` layer
             )
 
-        input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
+        if self.combination_type == "film":
+            cell_sum = content_embeds + number_embeds + date_embeds
+            gamma, beta = self.film(column_embeds)
+            gamma = gamma.type(cell_sum.dtype)
+            beta = beta.type(cell_sum.dtype)
+            # column_embeds is added back as a bias term so that with the FiLM
+            # generator zero-initialised (gamma=1, beta=0) this branch matches
+            # the sum branch element-wise — see FiLMGenerator docstring.
+            input_embeds = gamma * cell_sum + beta + column_embeds
+        else:
+            input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
 
         if is_classification and self.is_target_content_mapping:
             # use the text embeddings, but pass them through a dedicated linear layer for the target column

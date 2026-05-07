@@ -10,6 +10,7 @@ embedding_model_to_dimension_and_pooling = {
     "sentence-transformers/all-MiniLM-L12-v2": (384, "mean"),
     "intfloat/multilingual-e5-small": (384, "mean"),
     "Alibaba-NLP/gte-multilingual-base": (768, "cls"),
+    "Qwen/Qwen3-Embedding-0.6B": (1024, "last_token"),
 }
 
 QUANTILE_DIMENSION_DEFAULT = 64

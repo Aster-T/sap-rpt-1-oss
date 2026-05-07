@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(py --version)",
+      "PowerShell(D:\\\\miniconda3\\\\python.exe --version)"
+    ]
+  }
+}
