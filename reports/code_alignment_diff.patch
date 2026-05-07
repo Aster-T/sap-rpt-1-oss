@@ -1,1071 +1,1308 @@
-diff --git a/.gitignore b/.gitignore
-index 2d3a495..ee3999e 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -153,4 +153,7 @@ tmp*.py
- outputs/
- gen_data/
- checkpoints/
--test/
-\ No newline at end of file
-+test/
-+
-+# papers
-+papers/
-\ No newline at end of file
 diff --git a/README.md b/README.md
-index e285230..18ec4c0 100644
+index 18ec4c0..01f3ec8 100644
 --- a/README.md
 +++ b/README.md
-@@ -113,6 +113,31 @@ print("R² Score:", r2)
+@@ -138,6 +138,13 @@ Use `--max-steps 10` for a quick dry-run. `LRU_CACHE_SIZE=10000000` is required
+ for Exp 2/3 because Qwen3 embeddings are ~30× more expensive than MiniLM and
+ T4 has heavy column-name / categorical-value reuse.
  
- 
- 
-+## Reproducing the ablation experiments
-+
-+Three ablation configurations are wired up via `sap_rpt_oss/run_experiment.py`:
-+
-+| Exp | Sentence embedder | Embedding fusion | Training | Notes |
-+| --- | --- | --- | --- | --- |
-+| 1 | `sentence-transformers/all-MiniLM-L6-v2` | FiLM | Post-training from official HF checkpoint | Isolates the effect of FiLM vs sum |
-+| 2 | `Qwen/Qwen3-Embedding-0.6B` | sum (paper default) | From-scratch on T4 | Isolates the effect of a stronger sentence embedder |
-+| 3 | `Qwen/Qwen3-Embedding-0.6B` | FiLM | From-scratch on T4 | Combined effect |
-+
-+```bash
-+# Exp 1: MiniLM-L6 + FiLM, post-training from official HF checkpoint
-+python -m sap_rpt_oss.run_experiment --exp 1
-+
-+# Exp 2: Qwen3-Embedding-0.6B + sum, from scratch on T4
-+LRU_CACHE_SIZE=10000000 python -m sap_rpt_oss.run_experiment --exp 2
-+
-+# Exp 3: Qwen3-Embedding-0.6B + FiLM, from scratch on T4
-+LRU_CACHE_SIZE=10000000 python -m sap_rpt_oss.run_experiment --exp 3
-+```
-+
-+Use `--max-steps 10` for a quick dry-run. `LRU_CACHE_SIZE=10000000` is required
-+for Exp 2/3 because Qwen3 embeddings are ~30× more expensive than MiniLM and
-+T4 has heavy column-name / categorical-value reuse.
++Each invocation **auto-resumes** from the highest-step checkpoint already
++present in the experiment's checkpoint directory (e.g.
++`checkpoints/exp1_minilm_film/exp1_minilm_film-{step}-step.pt`). To start
++fresh — e.g. after changing the config — pass `--no-resume`. Default step
++budgets per experiment: Exp 1 = 200K (post-training), Exp 2/3 = 8M each
++(paper base from-scratch).
 +
  ## Known Issues
  No known issues
  
-diff --git a/sap_rpt_oss/configs.py b/sap_rpt_oss/configs.py
-index d27cf30..a134a99 100644
---- a/sap_rpt_oss/configs.py
-+++ b/sap_rpt_oss/configs.py
-@@ -1,18 +1,25 @@
-+import dataclasses
- from dataclasses import dataclass, field
- from datetime import date
- from pathlib import Path
+diff --git a/reports/code_alignment_diff.patch b/reports/code_alignment_diff.patch
+index edb8bcd..e69de29 100644
+--- a/reports/code_alignment_diff.patch
++++ b/reports/code_alignment_diff.patch
+@@ -1,1071 +0,0 @@
+-diff --git a/.gitignore b/.gitignore
+-index 2d3a495..ee3999e 100644
+---- a/.gitignore
+-+++ b/.gitignore
+-@@ -153,4 +153,7 @@ tmp*.py
+- outputs/
+- gen_data/
+- checkpoints/
+--test/
+-\ No newline at end of file
+-+test/
+-+
+-+# papers
+-+papers/
+-\ No newline at end of file
+-diff --git a/README.md b/README.md
+-index e285230..18ec4c0 100644
+---- a/README.md
+-+++ b/README.md
+-@@ -113,6 +113,31 @@ print("R² Score:", r2)
+- 
+- 
+- 
+-+## Reproducing the ablation experiments
+-+
+-+Three ablation configurations are wired up via `sap_rpt_oss/run_experiment.py`:
+-+
+-+| Exp | Sentence embedder | Embedding fusion | Training | Notes |
+-+| --- | --- | --- | --- | --- |
+-+| 1 | `sentence-transformers/all-MiniLM-L6-v2` | FiLM | Post-training from official HF checkpoint | Isolates the effect of FiLM vs sum |
+-+| 2 | `Qwen/Qwen3-Embedding-0.6B` | sum (paper default) | From-scratch on T4 | Isolates the effect of a stronger sentence embedder |
+-+| 3 | `Qwen/Qwen3-Embedding-0.6B` | FiLM | From-scratch on T4 | Combined effect |
+-+
+-+```bash
+-+# Exp 1: MiniLM-L6 + FiLM, post-training from official HF checkpoint
+-+python -m sap_rpt_oss.run_experiment --exp 1
+-+
+-+# Exp 2: Qwen3-Embedding-0.6B + sum, from scratch on T4
+-+LRU_CACHE_SIZE=10000000 python -m sap_rpt_oss.run_experiment --exp 2
+-+
+-+# Exp 3: Qwen3-Embedding-0.6B + FiLM, from scratch on T4
+-+LRU_CACHE_SIZE=10000000 python -m sap_rpt_oss.run_experiment --exp 3
+-+```
+-+
+-+Use `--max-steps 10` for a quick dry-run. `LRU_CACHE_SIZE=10000000` is required
+-+for Exp 2/3 because Qwen3 embeddings are ~30× more expensive than MiniLM and
+-+T4 has heavy column-name / categorical-value reuse.
+-+
+- ## Known Issues
+- No known issues
+- 
+-diff --git a/sap_rpt_oss/configs.py b/sap_rpt_oss/configs.py
+-index d27cf30..a134a99 100644
+---- a/sap_rpt_oss/configs.py
+-+++ b/sap_rpt_oss/configs.py
+-@@ -1,18 +1,25 @@
+-+import dataclasses
+- from dataclasses import dataclass, field
+- from datetime import date
+- from pathlib import Path
+- 
+--from sap_rpt_oss.constants import ModelSize
+-+from sap_rpt_oss.constants import (
+-+    ModelSize,
+-+    embedding_model_to_dimension_and_pooling,
+-+)
+- 
+- 
+--@dataclass(slots=True)
+-+# Task 8 uses dataclasses.replace on FinetuneConfig; slots=True can interact
+-+# poorly with replace + nested default_factory in some configurations, so we
+-+# keep the dataclasses without slots for forward-compatibility.
+-+@dataclass
+- class TableRulesConfig:
+-     """Rules for table filtering, feature pruning, and target selection."""
+- 
+-     # 去掉唯一值列
+-     drop_constant_columns: bool = True
+--    # 最大特征数
+--    max_num_columns: int = 50
+-+    # 最大特征数（与推理侧 MAX_NUM_COLUMNS 对齐，论文 Section 4.1 末段）
+-+    max_num_columns: int = 500
+-     # 最小行数
+-     min_num_rows: int = 150
+-     # 缺失值超过这个比例的数值列跳过
+-@@ -25,7 +32,7 @@ class TableRulesConfig:
+-         return max(0, self.max_num_columns - 1)
+- 
+- 
+--@dataclass(slots=True)
+-+@dataclass
+- class FinetuneConfig:
+-     data_root_path: Path = Path("datasets/t4/datas")
+-     output_root_path: Path = Path("outputs/finetune")
+-@@ -51,10 +58,17 @@ class FinetuneConfig:
+-     gradient_clip_val: float = 1.0
+-     log_every_n_steps: int = 50
+- 
+-+    # Architecture toggles (paper-aligned defaults).
+-+    weight_sharing: bool = True
+-+    combination_type: str = "sum"  # "sum" (paper) or "film" (Exp 1/3 ablation)
+-+    use_weekday: bool = False  # paper does not use weekday in date encoding
+-+    sentence_embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+-+
+-     # Table filtering and target-selection rules aligned with the pretraining setup.
+-     table_rules: TableRulesConfig = field(
+-         default_factory=lambda: TableRulesConfig(
+-             min_num_rows=150,
+-+            max_num_columns=500,
+-         )
+-     )
+- 
+-@@ -75,6 +89,11 @@ class FinetuneConfig:
+- 
+-     # Optional curriculum stage 2.
+-     curriculum_stage2_data_root_path: Path | None = None
+-+    # If set, stage 2 mixes T4 (curriculum_stage2_t4_data_root_path) and the Ma et al.
+-+    # data via Bernoulli sampling with p=curriculum_stage2_mixing_ratio (T4 share).
+-+    # When None, stage 2 falls back to a single source (curriculum_stage2_data_root_path).
+-+    curriculum_stage2_t4_data_root_path: Path | None = None
+-+    curriculum_stage2_mixing_ratio: float = 0.8
+-     curriculum_stage2_output_root_path: Path = Path(
+-         "outputs/finetune/curriculum_stage2"
+-     )
+-@@ -112,8 +131,14 @@ class FinetuneConfig:
+-     def use_curriculum_stage2(self) -> bool:
+-         return self.curriculum_stage2_data_root_path is not None
+- 
+-+    @property
+-+    def sentence_embedding_dim(self) -> int:
+-+        return embedding_model_to_dimension_and_pooling[
+-+            self.sentence_embedding_model_name
+-+        ][0]
+-+
+- 
+--@dataclass(slots=True)
+-+@dataclass
+- class InferenceConfigs:
+-     checkpoints_path: Path = Path("checkpoints")
+-     input_root_path: Path = Path("datasets")
+-@@ -122,3 +147,71 @@ class InferenceConfigs:
+- 
+- FINETUNE_CONFIG = FinetuneConfig()
+- INFERENCE_CONFIG = InferenceConfigs()
+-+
+-+
+-+# ----------------------------------------------------------------------------
+-+# Task 8 — three-experiment ablation factories
+-+# ----------------------------------------------------------------------------
+-+def get_paper_aligned_pretrain_config() -> FinetuneConfig:
+-+    """ConTextTab paper base configuration: MiniLM-L6 + sum + from-scratch."""
+-+    return FinetuneConfig(
+-+        pretrain_from_scratch=True,
+-+        model_size=ModelSize.base,
+-+        weight_sharing=True,
+-+        sentence_embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
+-+        combination_type="sum",
+-+        use_weekday=False,
+-+        learning_rate=1e-4,
+-+        warmup_steps=1000,
+-+        gradient_clip_val=1.0,
+-+        max_steps=8_000_000,
+-+        accumulate_grad_batches=256,
+-+        stage1_max_num_rows=1000,
+-+        query_size_range=(50, 900),
+-+        balance_classification_tasks=True,
+-+        table_rules=TableRulesConfig(
+-+            min_num_rows=150,
+-+            max_num_columns=500,
+-+            numeric_nan_ratio_threshold=0.5,
+-+            categorical_unique_ratio_threshold=0.2,
+-+            drop_constant_columns=True,
+-+        ),
+-+    )
+-+
+-+
+-+def get_exp1_minilm_film_config() -> FinetuneConfig:
+-+    """Exp 1: MiniLM-L6 + FiLM, post-training from official HF checkpoint."""
+-+    cfg = get_paper_aligned_pretrain_config()
+-+    return dataclasses.replace(
+-+        cfg,
+-+        pretrain_from_scratch=False,
+-+        resume_checkpoint_path=None,  # downloaded inside run_experiment.py
+-+        combination_type="film",
+-+        max_steps=200_000,
+-+        warmup_steps=2_000,
+-+        learning_rate=1e-4,
+-+        output_root_path=Path("outputs/exp1_minilm_film"),
+-+        checkpoint_root_path=Path("checkpoints/exp1_minilm_film"),
+-+    )
+-+
+-+
+-+def get_exp2_qwen3_sum_config() -> FinetuneConfig:
+-+    """Exp 2: Qwen3-Embedding-0.6B + sum, T4 from-scratch pretraining."""
+-+    cfg = get_paper_aligned_pretrain_config()
+-+    return dataclasses.replace(
+-+        cfg,
+-+        sentence_embedding_model_name="Qwen/Qwen3-Embedding-0.6B",
+-+        combination_type="sum",
+-+        output_root_path=Path("outputs/exp2_qwen3_sum"),
+-+        checkpoint_root_path=Path("checkpoints/exp2_qwen3_sum"),
+-+    )
+-+
+-+
+-+def get_exp3_qwen3_film_config() -> FinetuneConfig:
+-+    """Exp 3: Qwen3-Embedding-0.6B + FiLM, T4 from-scratch pretraining."""
+-+    return dataclasses.replace(
+-+        get_exp2_qwen3_sum_config(),
+-+        combination_type="film",
+-+        output_root_path=Path("outputs/exp3_qwen3_film"),
+-+        checkpoint_root_path=Path("checkpoints/exp3_qwen3_film"),
+-+    )
+-diff --git a/sap_rpt_oss/constants.py b/sap_rpt_oss/constants.py
+-index 913b4f8..cc47c8f 100644
+---- a/sap_rpt_oss/constants.py
+-+++ b/sap_rpt_oss/constants.py
+-@@ -10,6 +10,7 @@ embedding_model_to_dimension_and_pooling = {
+-     "sentence-transformers/all-MiniLM-L12-v2": (384, "mean"),
+-     "intfloat/multilingual-e5-small": (384, "mean"),
+-     "Alibaba-NLP/gte-multilingual-base": (768, "cls"),
+-+    "Qwen/Qwen3-Embedding-0.6B": (1024, "last_token"),
+- }
+- 
+- QUANTILE_DIMENSION_DEFAULT = 64
+-diff --git a/sap_rpt_oss/data/ds.py b/sap_rpt_oss/data/ds.py
+-index 977db17..47b717c 100644
+---- a/sap_rpt_oss/data/ds.py
+-+++ b/sap_rpt_oss/data/ds.py
+-@@ -534,3 +534,48 @@ class RPTParquetDataset(IterableDataset):
+- 
+-         if not yielded_any and worker_info is None:
+-             raise ValueError(f"no eligible parquet tables found under {self.root_dir}")
+-+
+-+
+-+class MixedRPTDataset(IterableDataset):
+-+    """Bernoulli-mix two RPTParquetDataset streams.
+-+
+-+    Each draw selects the primary dataset with probability `mixing_ratio`,
+-+    otherwise the secondary. Used for paper Appendix A.4 stage-2 curriculum
+-+    where T4 contributes 80% and the Ma et al. data 20%.
+-+    """
+-+
+-+    def __init__(
+-+        self,
+-+        primary: "RPTParquetDataset",
+-+        secondary: "RPTParquetDataset",
+-+        mixing_ratio: float = 0.8,
+-+        random_seed: int = 42,
+-+    ):
+-+        super().__init__()
+-+        if not 0.0 <= mixing_ratio <= 1.0:
+-+            raise ValueError(
+-+                f"mixing_ratio must be in [0, 1]; got {mixing_ratio}"
+-+            )
+-+        self.primary = primary
+-+        self.secondary = secondary
+-+        self.mixing_ratio = float(mixing_ratio)
+-+        self.random_seed = random_seed
+-+
+-+    def __iter__(self) -> Iterator[dict[str, object]]:
+-+        rng = np.random.default_rng(self.random_seed)
+-+        it_primary = iter(self.primary)
+-+        it_secondary = iter(self.secondary)
+-+        while True:
+-+            pick_primary = rng.random() < self.mixing_ratio
+-+            try:
+-+                if pick_primary:
+-+                    yield next(it_primary)
+-+                else:
+-+                    yield next(it_secondary)
+-+            except StopIteration:
+-+                # fall back to the other stream so training does not stall when
+-+                # one dataset finishes first
+-+                try:
+-+                    yield next(it_secondary if pick_primary else it_primary)
+-+                except StopIteration:
+-+                    return
+-diff --git a/sap_rpt_oss/data/sentence_embedder.py b/sap_rpt_oss/data/sentence_embedder.py
+-index eed0b0c..f07c4f5 100644
+---- a/sap_rpt_oss/data/sentence_embedder.py
+-+++ b/sap_rpt_oss/data/sentence_embedder.py
+-@@ -20,6 +20,10 @@ class SentenceEmbedder:
+-         )
+-         self.batch_size = batch_size
+-         self.tokenizer = AutoTokenizer.from_pretrained(sentence_embedding_model_name)
+-+        if self.pooling_method == "last_token":
+-+            # Qwen3-Embedding officially recommends left-padding so that the last
+-+            # position always corresponds to the final non-pad token.
+-+            self.tokenizer.padding_side = "left"
+-         if device is None:
+-             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+-         else:
+-@@ -50,6 +54,14 @@ class SentenceEmbedder:
+-             return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+-                 input_mask_expanded.sum(1), min=1e-9
+-             )
+-+        if self.pooling_method == "last_token":
+-+            if self.tokenizer.padding_side == "left":
+-+                return token_embeddings[:, -1].type(token_embeddings.dtype)
+-+            seq_lengths = attention_mask.sum(dim=1) - 1
+-+            batch_size = token_embeddings.size(0)
+-+            return token_embeddings[
+-+                torch.arange(batch_size, device=token_embeddings.device), seq_lengths
+-+            ].type(token_embeddings.dtype)
+-         assert self.pooling_method == "cls"
+-         return token_embeddings[:, 0].type(token_embeddings.dtype)
+- 
+-diff --git a/sap_rpt_oss/data/tokenizer.py b/sap_rpt_oss/data/tokenizer.py
+-index ca2b1a0..62e5bc9 100644
+---- a/sap_rpt_oss/data/tokenizer.py
+-+++ b/sap_rpt_oss/data/tokenizer.py
+-@@ -4,6 +4,7 @@
+- 
+- import datetime
+- import os
+-+import warnings
+- from typing import Collection, Literal, Optional, Union
+- 
+- import numpy as np
+-@@ -19,12 +20,17 @@ from sap_rpt_oss.constants import (
+- from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
+- from sap_rpt_oss.utils.lru_cache import LRU_Cache
+- 
+-+DEFAULT_SENTENCE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+-+
+- 
+- class Tokenizer:
+-     QUANTILE_DIMENSION = QUANTILE_DIMENSION_DEFAULT
+--    sentence_embedding_model_name = "sentence-transformers/all-MiniLM-L12-v2"
+-+    # Kept for backwards-compatibility with older external code that reads the
+-+    # class attribute. The instance attribute (set in __init__) is the source
+-+    # of truth.
+-+    sentence_embedding_model_name = DEFAULT_SENTENCE_EMBEDDING_MODEL
+-     embedding_dim = embedding_model_to_dimension_and_pooling[
+--        sentence_embedding_model_name
+-+        DEFAULT_SENTENCE_EMBEDDING_MODEL
+-     ][0]
+- 
+-     def __init__(
+-@@ -35,7 +41,9 @@ class Tokenizer:
+-         ] = "cross-entropy",
+-         num_regression_bins=16,
+-         random_seed=None,
+--        is_valid=False,
+-+        is_valid: Optional[bool] = None,
+-+        clip_quantile: float = 0.02,
+-+        sentence_embedding_model_name: str = DEFAULT_SENTENCE_EMBEDDING_MODEL,
+-         sentence_embedder_device: Optional[Union[str, torch.device]] = None,
+-         verbose: bool = True,
+-     ):
+-@@ -43,9 +51,34 @@ class Tokenizer:
+-         self.classification_type = classification_type
+-         self.random_seed = random_seed
+-         self.num_regression_bins = num_regression_bins
+--        self.is_valid = is_valid
+-         self.verbose = verbose
+- 
+-+        if is_valid is not None:
+-+            warnings.warn(
+-+                "Tokenizer(is_valid=...) is deprecated; pass clip_quantile instead. "
+-+                "is_valid=True is equivalent to clip_quantile=0.005 and "
+-+                "is_valid=False to clip_quantile=0.02.",
+-+                DeprecationWarning,
+-+                stacklevel=2,
+-+            )
+-+            clip_quantile = 0.005 if is_valid else 0.02
+-+        self.is_valid = bool(is_valid) if is_valid is not None else False
+-+        if not 0.0 <= clip_quantile < 0.5:
+-+            raise ValueError(
+-+                f"clip_quantile must be in [0, 0.5); got {clip_quantile}"
+-+            )
+-+        self.clip_quantile = float(clip_quantile)
+-+
+-+        if sentence_embedding_model_name not in embedding_model_to_dimension_and_pooling:
+-+            raise ValueError(
+-+                f"Unknown sentence embedding model: {sentence_embedding_model_name}. "
+-+                f"Known models: {list(embedding_model_to_dimension_and_pooling)}"
+-+            )
+-+        self.sentence_embedding_model_name = sentence_embedding_model_name
+-+        self.embedding_dim = embedding_model_to_dimension_and_pooling[
+-+            sentence_embedding_model_name
+-+        ][0]
+-+
+-         self.sentence_embedder = SentenceEmbedder(
+-             self.sentence_embedding_model_name,
+-             device=sentence_embedder_device,
+-@@ -108,12 +141,10 @@ class Tokenizer:
+-             labels = np.zeros(total_rows, dtype=np.float32)
+-             return labels, torch.tensor(0.0), torch.tensor(1.0)
+- 
+--        if self.is_valid:
+--            # remove outliers below 0.5th percentile and above 99.5th percentile
+--            vmin, vmax = np.nanquantile(train_data, [0.005, 0.995])
+--        else:
+--            # remove outliers below 2th percentile and above 98th percentile
+--            vmin, vmax = np.nanpercentile(train_data, [2, 98])
+-+        # Clip outliers between [clip_quantile, 1 - clip_quantile] (paper Section 3.1
+-+        # uses 2% / 98% for pretraining; inference path uses 0.5% / 99.5%).
+-+        q_lo, q_hi = self.clip_quantile, 1.0 - self.clip_quantile
+-+        vmin, vmax = np.nanquantile(train_data, [q_lo, q_hi])
+-         train_data = np.clip(train_data, vmin, vmax)
+-         test_data = np.clip(test_data, vmin, vmax)
+- 
+-diff --git a/sap_rpt_oss/model/embeddings.py b/sap_rpt_oss/model/embeddings.py
+-index f589f58..57ef47c 100644
+---- a/sap_rpt_oss/model/embeddings.py
+-+++ b/sap_rpt_oss/model/embeddings.py
+-@@ -2,7 +2,7 @@
+- #
+- # SPDX-License-Identifier: Apache-2.0
+- 
+--from typing import Dict, Literal
+-+from typing import Dict, Literal, Optional
+- 
+- import torch
+- from torch import nn
+-@@ -11,21 +11,49 @@ from sap_rpt_oss.data.tokenizer import Tokenizer
+- 
+- 
+- class DateEmbeddings(nn.Module):
+--    def __init__(self, hidden_size):
+-+    def __init__(self, hidden_size, use_weekday: bool = False):
+-         super().__init__()
+-         self.year_embeddings = nn.Embedding(52, hidden_size)
+-         self.month_embeddings = nn.Embedding(13, hidden_size)
+-         self.day_embeddings = nn.Embedding(32, hidden_size)
+-+        # weekday_embeddings is always constructed (so checkpoints stay loadable),
+-+        # but only contributes to the forward pass when use_weekday=True.
+-         self.weekday_embeddings = nn.Embedding(8, hidden_size)
+-+        self.use_weekday = use_weekday
+- 
+-     def forward(self, date_year_month_day_weekday):
+-         # date_year_month_day_weekday has shape (num_rows, num_cols, 4)
+-         year_embeds = self.year_embeddings(date_year_month_day_weekday[:, :, 0])
+-         month_embeds = self.month_embeddings(date_year_month_day_weekday[:, :, 1])
+-         day_embeds = self.day_embeddings(date_year_month_day_weekday[:, :, 2])
+--        weekday_embeds = self.weekday_embeddings(date_year_month_day_weekday[:, :, 3])
+-+        out = year_embeds + month_embeds + day_embeds
+-+        if self.use_weekday:
+-+            out = out + self.weekday_embeddings(date_year_month_day_weekday[:, :, 3])
+-+        return out
+- 
+--        return year_embeds + month_embeds + day_embeds + weekday_embeds
+-+
+-+class FiLMGenerator(nn.Module):
+-+    """Generates per-column (gamma, beta) from column header embeddings.
+-+
+-+    Zero-init on proj2 ensures gamma starts at 1 and beta at 0, so the FiLM
+-+    output equals the unmodulated cell sum at initialization. Combined with
+-+    additively reattaching column_embeds in CellEmbeddings.forward, this gives
+-+    a forward pass strictly equivalent to combination_type="sum" at init time
+-+    so post-training from a sum-trained checkpoint starts from a smooth point.
+-+    """
+-+
+-+    def __init__(self, hidden_size: int):
+-+        super().__init__()
+-+        self.proj1 = nn.Linear(hidden_size, hidden_size)
+-+        self.proj2 = nn.Linear(hidden_size, 2 * hidden_size)
+-+        nn.init.zeros_(self.proj2.weight)
+-+        nn.init.zeros_(self.proj2.bias)
+-+
+-+    def forward(self, column_embeds):
+-+        h = torch.nn.functional.gelu(self.proj1(column_embeds))
+-+        gamma_beta = self.proj2(h)
+-+        gamma, beta = gamma_beta.chunk(2, dim=-1)
+-+        return 1.0 + gamma, beta
+- 
+- 
+- class CellEmbeddings(nn.Module):
+-@@ -45,9 +73,17 @@ class CellEmbeddings(nn.Module):
+-         config,
+-         regression_type: Literal["reg-as-classif", "l2"] = "reg-as-classif",
+-         is_target_content_mapping: bool = False,
+-+        sentence_embedding_dim: Optional[int] = None,
+-+        combination_type: Literal["sum", "film"] = "sum",
+-+        use_weekday: bool = False,
+-     ):
+-         super().__init__()
+-         self.hidden_size = config.hidden_size
+-+        if sentence_embedding_dim is None:
+-+            sentence_embedding_dim = Tokenizer.embedding_dim
+-+        self.sentence_embedding_dim = sentence_embedding_dim
+-+        self.combination_type = combination_type
+-+
+-         if regression_type == "l2":
+-             self.number_embeddings = nn.Linear(1, config.hidden_size)
+-         else:
+-@@ -69,15 +105,18 @@ class CellEmbeddings(nn.Module):
+-             Tokenizer.QUANTILE_DIMENSION, config.hidden_size
+-         )
+- 
+--        self.date_embeddings = DateEmbeddings(config.hidden_size)
+-+        self.date_embeddings = DateEmbeddings(config.hidden_size, use_weekday=use_weekday)
+- 
+--        self.column_remapping = nn.Linear(Tokenizer.embedding_dim, config.hidden_size)
+--        self.content_remapping = nn.Linear(Tokenizer.embedding_dim, config.hidden_size)
+-+        self.column_remapping = nn.Linear(sentence_embedding_dim, config.hidden_size)
+-+        self.content_remapping = nn.Linear(sentence_embedding_dim, config.hidden_size)
+-         if self.is_target_content_mapping:
+-             self.target_content_remapping = nn.Linear(
+--                Tokenizer.embedding_dim, config.hidden_size
+-+                sentence_embedding_dim, config.hidden_size
+-             )
+- 
+-+        if self.combination_type == "film":
+-+            self.film = FiLMGenerator(config.hidden_size)
+-+
+-         self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+-         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+- 
+-@@ -153,7 +192,17 @@ class CellEmbeddings(nn.Module):
+-                 0  # zero out to remove bias from `content_remapping` layer
+-             )
+- 
+--        input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
+-+        if self.combination_type == "film":
+-+            cell_sum = content_embeds + number_embeds + date_embeds
+-+            gamma, beta = self.film(column_embeds)
+-+            gamma = gamma.type(cell_sum.dtype)
+-+            beta = beta.type(cell_sum.dtype)
+-+            # column_embeds is added back as a bias term so that with the FiLM
+-+            # generator zero-initialised (gamma=1, beta=0) this branch matches
+-+            # the sum branch element-wise — see FiLMGenerator docstring.
+-+            input_embeds = gamma * cell_sum + beta + column_embeds
+-+        else:
+-+            input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
+- 
+-         if is_classification and self.is_target_content_mapping:
+-             # use the text embeddings, but pass them through a dedicated linear layer for the target column
+-diff --git a/sap_rpt_oss/model/torch_model.py b/sap_rpt_oss/model/torch_model.py
+-index 70dcc56..c2e9c6e 100644
+---- a/sap_rpt_oss/model/torch_model.py
+-+++ b/sap_rpt_oss/model/torch_model.py
+-@@ -49,6 +49,11 @@ class RPT(nn.Module, ModuleUtilsMixin):
+-             "cross-entropy", "clustering", "clustering-cosine"
+-         ] = "cross-entropy",
+-         checkpointing_segments=1,
+-+        weight_sharing: bool = True,
+-+        combination_type: Literal["sum", "film"] = "sum",
+-+        use_weekday: bool = False,
+-+        sentence_embedding_dim: int = 384,
+-+        verbose: bool = False,
+-         **kwargs,
+-     ):
+-         super().__init__()
+-@@ -64,6 +69,10 @@ class RPT(nn.Module, ModuleUtilsMixin):
+-         )
+-         self.regression_type = regression_type
+-         self.classification_type = classification_type
+-+        self.weight_sharing = weight_sharing
+-+        self.combination_type = combination_type
+-+        self.use_weekday = use_weekday
+-+        self.sentence_embedding_dim = sentence_embedding_dim
+-         max_number_of_labels = Tokenizer.QUANTILE_DIMENSION
+- 
+-         if self.classification_type in ["clustering", "clustering-cosine"]:
+-@@ -99,13 +108,34 @@ class RPT(nn.Module, ModuleUtilsMixin):
+-             self.config,
+-             regression_type=regression_type,
+-             is_target_content_mapping=(classification_type != "cross-entropy"),
+-+            sentence_embedding_dim=sentence_embedding_dim,
+-+            combination_type=combination_type,
+-+            use_weekday=use_weekday,
+-         )
+--        self.in_context_encoder = nn.ModuleList(
+--            [
+--                TwoDimensionalAttentionLayer(self.config)
+--                for _ in range(self.config.num_hidden_layers)
+--            ]
+--        )
+-+        if weight_sharing:
+-+            shared_layer = TwoDimensionalAttentionLayer(self.config)
+-+            # ModuleList with repeated references — PyTorch correctly shares
+-+            # parameters across all positions, so the in-context encoder is a
+-+            # single physical layer applied num_hidden_layers times.
+-+            self.in_context_encoder = nn.ModuleList(
+-+                [shared_layer] * self.config.num_hidden_layers
+-+            )
+-+        else:
+-+            self.in_context_encoder = nn.ModuleList(
+-+                [
+-+                    TwoDimensionalAttentionLayer(self.config)
+-+                    for _ in range(self.config.num_hidden_layers)
+-+                ]
+-+            )
+-+
+-+        if verbose:
+-+            trainable = sum(
+-+                p.numel() for p in self.parameters() if p.requires_grad
+-+            )
+-+            print(
+-+                f"[RPT] weight_sharing={weight_sharing} combination_type={combination_type} "
+-+                f"trainable_params={trainable:,}"
+-+            )
+- 
+-     @staticmethod
+-     def build_context_attention_mask(data, device):
+-@@ -567,8 +597,26 @@ class RPT(nn.Module, ModuleUtilsMixin):
+-             self._extract_state_dict(checkpoint)
+-         )
+- 
+-+        # In FiLM mode the checkpoint may have been trained with combination_type="sum"
+-+        # and so will not contain `embeddings.film.*` keys. We accept missing keys
+-+        # only for the FiLM module — anything else is still a real load error.
+-+        is_film = getattr(self, "combination_type", "sum") == "film"
+-+
+-+        def _load(sd):
+-+            if is_film:
+-+                missing, unexpected = self.load_state_dict(sd, strict=False)
+-+                non_film_missing = [k for k in missing if not k.startswith("embeddings.film.")]
+-+                if non_film_missing or unexpected:
+-+                    raise RuntimeError(
+-+                        f"strict=False load failed beyond FiLM: missing={non_film_missing}, "
+-+                        f"unexpected={list(unexpected)}"
+-+                    )
+-+                print("FiLM parameters initialized from scratch (not in checkpoint).")
+-+            else:
+-+                self.load_state_dict(sd)
+-+
+-         try:
+--            self.load_state_dict(state_dict)
+-+            _load(state_dict)
+-             return
+-         except RuntimeError as load_error:
+-             if not is_copy_last_layer:
+-@@ -578,7 +626,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
+- 
+-         copied_state_dict = self.copy_last_layer_weights_to_all(dict(state_dict))
+-         try:
+--            self.load_state_dict(copied_state_dict)
+-+            _load(copied_state_dict)
+-         except RuntimeError as copied_load_error:
+-             raise RuntimeError(
+-                 "Failed to load weights after normalizing checkpoint keys and "
+-diff --git a/sap_rpt_oss/pretrain_run.py b/sap_rpt_oss/pretrain_run.py
+-index 8ee503b..a7f9454 100644
+---- a/sap_rpt_oss/pretrain_run.py
+-+++ b/sap_rpt_oss/pretrain_run.py
+-@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
+- from tqdm.auto import tqdm
+- 
+- from sap_rpt_oss.configs import FINETUNE_CONFIG, FinetuneConfig
+--from sap_rpt_oss.data.ds import RPTParquetDataset
+-+from sap_rpt_oss.data.ds import MixedRPTDataset, RPTParquetDataset
+- from sap_rpt_oss.data.tokenizer import Tokenizer
+- from sap_rpt_oss.model.torch_model import RPT
+- 
+-@@ -48,13 +48,13 @@ def initialize_model_weights(model: RPT):
+-     model.apply(reset_module_parameters)
+- 
+- 
+--def build_dataloader(
+-+def _build_single_dataset(
+-     config: FinetuneConfig,
+-     tokenizer: Tokenizer,
+-     data_root: Path,
+-     max_num_rows: int,
+--) -> DataLoader:
+--    dataset = RPTParquetDataset(
+-+) -> RPTParquetDataset:
+-+    return RPTParquetDataset(
+-         root_dir=data_root,
+-         fit_size=None,
+-         tokenizer=tokenizer,
+-@@ -72,6 +72,27 @@ def build_dataloader(
+-         table_rules=config.table_rules,
+-     )
+- 
+-+
+-+def build_dataloader(
+-+    config: FinetuneConfig,
+-+    tokenizer: Tokenizer,
+-+    data_root: Path,
+-+    max_num_rows: int,
+-+    secondary_data_root: Optional[Path] = None,
+-+    mixing_ratio: float = 0.8,
+-+) -> DataLoader:
+-+    dataset = _build_single_dataset(config, tokenizer, data_root, max_num_rows)
+-+    if secondary_data_root is not None:
+-+        secondary = _build_single_dataset(
+-+            config, tokenizer, secondary_data_root, max_num_rows
+-+        )
+-+        dataset = MixedRPTDataset(
+-+            primary=dataset,
+-+            secondary=secondary,
+-+            mixing_ratio=mixing_ratio,
+-+            random_seed=config.random_seed,
+-+        )
+-+
+-     dataloader_kwargs = {
+-         "batch_size": None,
+-         "num_workers": config.num_workers,
+-@@ -85,10 +106,31 @@ def build_model_and_tokenizer(
+-     config: FinetuneConfig,
+-     checkpoint: Optional[Path],
+- ):
+-+    tokenizer_device = (
+-+        "cpu"
+-+        if config.num_workers > 0
+-+        else ("cuda" if torch.cuda.is_available() else "cpu")
+-+    )
+-+    tokenizer = Tokenizer(
+-+        regression_type="l2",
+-+        classification_type="cross-entropy",
+-+        random_seed=config.random_seed,
+-+        num_regression_bins=16,
+-+        clip_quantile=0.02,  # paper Section 3.1 — pretraining uses 2/98 quantile clipping
+-+        sentence_embedding_model_name=config.sentence_embedding_model_name,
+-+        sentence_embedder_device=tokenizer_device,
+-+        verbose=False,
+-+    )
+-+
+-     model = RPT(
+-         model_size=config.model_size,
+-         regression_type="l2",
+-         classification_type="cross-entropy",
+-+        weight_sharing=config.weight_sharing,
+-+        combination_type=config.combination_type,
+-+        use_weekday=config.use_weekday,
+-+        sentence_embedding_dim=tokenizer.embedding_dim,
+-+        verbose=True,
+-     )
+-     if config.pretrain_from_scratch:
+-         initialize_model_weights(model)
+-@@ -99,20 +141,6 @@ def build_model_and_tokenizer(
+-             "resume_checkpoint_path must be set when pretrain_from_scratch is False"
+-         )
+- 
+--    tokenizer_device = (
+--        "cpu"
+--        if config.num_workers > 0
+--        else ("cuda" if torch.cuda.is_available() else "cpu")
+--    )
+--    tokenizer = Tokenizer(
+--        regression_type="l2",
+--        classification_type="cross-entropy",
+--        random_seed=config.random_seed,
+--        num_regression_bins=16,
+--        is_valid=True,
+--        sentence_embedder_device=tokenizer_device,
+--        verbose=False,
+--    )
+-     return model, tokenizer
+- 
+- 
+-@@ -152,6 +180,8 @@ def run_stage(
+-     output_root: Path,
+-     max_num_rows: int,
+-     max_steps: int,
+-+    secondary_data_root: Optional[Path] = None,
+-+    mixing_ratio: float = 0.8,
+- ):
+-     output_root.mkdir(parents=True, exist_ok=True)
+-     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+-@@ -165,6 +195,8 @@ def run_stage(
+-         tokenizer=tokenizer,
+-         data_root=data_root,
+-         max_num_rows=max_num_rows,
+-+        secondary_data_root=secondary_data_root,
+-+        mixing_ratio=mixing_ratio,
+-     )
+-     optimizer, scheduler = build_optimizer_and_scheduler(model, config)
+-     model.to(device)
+-@@ -290,14 +322,26 @@ def main():
+-     )
+- 
+-     if config.use_curriculum_stage2:
+-+        # Paper Appendix A.4 mixes T4 (80%) with the Ma et al. data (20%) in
+-+        # stage 2. Primary stream is T4 (defaults to the stage-1 data root if
+-+        # curriculum_stage2_t4_data_root_path is unset), secondary is Ma et al.
+-+        # (curriculum_stage2_data_root_path).
+-+        t4_root = Path(
+-+            config.curriculum_stage2_t4_data_root_path
+-+            if config.curriculum_stage2_t4_data_root_path is not None
+-+            else config.data_root_path
+-+        )
+-+        ma_root = Path(config.curriculum_stage2_data_root_path)
+-         run_stage(
+-             config=config,
+-             model=model,
+-             tokenizer=tokenizer,
+--            data_root=Path(config.curriculum_stage2_data_root_path),
+-+            data_root=t4_root,
+-             output_root=config.curriculum_stage2_output_root_path,
+-             max_num_rows=config.curriculum_stage2_max_num_rows,
+-             max_steps=config.curriculum_stage2_max_steps,
+-+            secondary_data_root=ma_root,
+-+            mixing_ratio=config.curriculum_stage2_mixing_ratio,
+-         )
+- 
+- 
+-diff --git a/sap_rpt_oss/rpt.py b/sap_rpt_oss/rpt.py
+-index 7afde80..87e3c23 100644
+---- a/sap_rpt_oss/rpt.py
+-+++ b/sap_rpt_oss/rpt.py
+-@@ -155,12 +155,16 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
+-         self.model.load_weights(Path(self._checkpoint_path), self.device)
+-         self.seed = 42
+-         self.drop_constant_columns = drop_constant_columns
+-+        # Inference uses tighter outlier clipping (0.5%/99.5%) than pretraining
+-+        # (paper Section 4.1, "selected based on outlier analysis on downstream
+-+        # tasks"). is_valid kept for backward-compat as the public arg.
+-+        clip_quantile = 0.005 if is_valid else 0.02
+-         self.tokenizer = Tokenizer(
+-             regression_type=self.regression_type,
+-             classification_type=self.classification_type,
+-             random_seed=self.seed,
+-             num_regression_bins=self.num_regression_bins,
+--            is_valid=is_valid,
+-+            clip_quantile=clip_quantile,
+-         )
+-         self.model.to(self.device).eval()
+- 
+-diff --git a/sap_rpt_oss/run_experiment.py b/sap_rpt_oss/run_experiment.py
+-new file mode 100644
+-index 0000000..b51f0f6
+---- /dev/null
+-+++ b/sap_rpt_oss/run_experiment.py
+-@@ -0,0 +1,108 @@
+-+# SPDX-FileCopyrightText: 2025 SAP SE
+-+#
+-+# SPDX-License-Identifier: Apache-2.0
+-+
+-+"""
+-+Unified launcher for the three ablation experiments.
+-+
+-+Usage:
+-+    python -m sap_rpt_oss.run_experiment --exp 1   # MiniLM-L6 + FiLM (post-training)
+-+    python -m sap_rpt_oss.run_experiment --exp 2   # Qwen3 + sum (from scratch)
+-+    python -m sap_rpt_oss.run_experiment --exp 3   # Qwen3 + FiLM (from scratch)
+-+"""
+-+
+-+import argparse
+-+import dataclasses
+-+from pathlib import Path
+-+from typing import Optional
+-+
+-+from huggingface_hub import hf_hub_download
+-+
+-+from sap_rpt_oss.configs import (
+-+    FinetuneConfig,
+-+    get_exp1_minilm_film_config,
+-+    get_exp2_qwen3_sum_config,
+-+    get_exp3_qwen3_film_config,
+-+)
+-+from sap_rpt_oss.pretrain_run import (
+-+    build_model_and_tokenizer,
+-+    run_stage,
+-+    seed_everything,
+-+)
+-+
+-+
+-+EXPERIMENTS = {
+-+    1: ("Exp 1: MiniLM-L6 + FiLM (post-training)", get_exp1_minilm_film_config),
+-+    2: ("Exp 2: Qwen3 + sum (from scratch)", get_exp2_qwen3_sum_config),
+-+    3: ("Exp 3: Qwen3 + FiLM (from scratch)", get_exp3_qwen3_film_config),
+-+}
+-+
+-+# The official HF checkpoint filename. Verified by listing repo files via the
+-+# huggingface_hub API at the time of writing; update here if SAP renames.
+-+OFFICIAL_CHECKPOINT_FILENAME = "2025-11-04_sap-rpt-one-oss.pt"
+-+OFFICIAL_CHECKPOINT_REPO = "SAP/sap-rpt-1-oss"
+-+
+-+
+-+def download_official_ckpt() -> Path:
+-+    """Download the official sap/sap-rpt-1-oss weight-shared checkpoint."""
+-+    return Path(
+-+        hf_hub_download(
+-+            repo_id=OFFICIAL_CHECKPOINT_REPO,
+-+            filename=OFFICIAL_CHECKPOINT_FILENAME,
+-+        )
+-+    )
+-+
+-+
+-+def main():
+-+    parser = argparse.ArgumentParser()
+-+    parser.add_argument("--exp", type=int, choices=[1, 2, 3], required=True)
+-+    parser.add_argument(
+-+        "--max-steps",
+-+        type=int,
+-+        default=None,
+-+        help="Override default max_steps (useful for dry-runs).",
+-+    )
+-+    parser.add_argument(
+-+        "--data-root",
+-+        type=str,
+-+        default=None,
+-+        help="Override the training data root path.",
+-+    )
+-+    args = parser.parse_args()
+-+
+-+    name, config_fn = EXPERIMENTS[args.exp]
+-+    print(f"[run_experiment] Starting {name}")
+-+
+-+    config: FinetuneConfig = config_fn()
+-+    overrides = {}
+-+    if args.max_steps is not None:
+-+        overrides["max_steps"] = args.max_steps
+-+    if args.data_root is not None:
+-+        overrides["data_root_path"] = Path(args.data_root)
+-+    if overrides:
+-+        config = dataclasses.replace(config, **overrides)
+-+
+-+    seed_everything(config.random_seed)
+-+
+-+    initial_checkpoint: Optional[Path] = None
+-+    if not config.pretrain_from_scratch:
+-+        # Exp 1: post-training from the official HF checkpoint.
+-+        initial_checkpoint = download_official_ckpt()
+-+        print(f"[run_experiment] Loading official checkpoint from {initial_checkpoint}")
+-+
+-+    model, tokenizer = build_model_and_tokenizer(
+-+        config=config, checkpoint=initial_checkpoint
+-+    )
+-+    run_stage(
+-+        config=config,
+-+        model=model,
+-+        tokenizer=tokenizer,
+-+        data_root=config.data_root_path,
+-+        output_root=config.output_root_path,
+-+        max_num_rows=config.stage1_max_num_rows,
+-+        max_steps=config.max_steps,
+-+    )
+-+
+-+
+-+if __name__ == "__main__":
+-+    main()
+-diff --git a/tests/__init__.py b/tests/__init__.py
+-new file mode 100644
+-index 0000000..e69de29
+-diff --git a/tests/test_film_ablation.py b/tests/test_film_ablation.py
+-new file mode 100644
+-index 0000000..84e3f34
+---- /dev/null
+-+++ b/tests/test_film_ablation.py
+-@@ -0,0 +1,86 @@
+-+# SPDX-FileCopyrightText: 2025 SAP SE
+-+#
+-+# SPDX-License-Identifier: Apache-2.0
+-+
+-+import torch
+-+
+-+from sap_rpt_oss.constants import ModelSize
+-+from sap_rpt_oss.model.torch_model import RPT
+-+
+-+
+-+def _make_dummy_batch(num_rows: int = 8, num_cols: int = 4, embed_dim: int = 384):
+-+    return {
+-+        "column_embeddings": torch.randn(num_cols, embed_dim, dtype=torch.float16),
+-+        "text_embeddings": torch.zeros(
+-+            num_rows, num_cols, embed_dim, dtype=torch.float16
+-+        ),
+-+        "date_year_month_day_weekday": torch.zeros(
+-+            num_rows, num_cols, 4, dtype=torch.long
+-+        ),
+-+        "number_normalized": torch.randn(num_rows, num_cols),
+-+        "target": torch.zeros(num_rows),
+-+        "target_delta": torch.zeros(num_rows),
+-+    }
+-+
+-+
+-+def test_sum_default_no_film_module():
+-+    m = RPT(
+-+        model_size=ModelSize.mini,
+-+        regression_type="l2",
+-+        classification_type="cross-entropy",
+-+    )
+-+    assert not hasattr(m.embeddings, "film") or m.embeddings.film is None
+-+
+-+
+-+def test_weight_sharing_active_by_default():
+-+    m = RPT(
+-+        model_size=ModelSize.base,
+-+        regression_type="l2",
+-+        classification_type="cross-entropy",
+-+    )
+-+    ids = {id(layer) for layer in m.in_context_encoder}
+-+    assert len(ids) == 1, "weight sharing not active"
+-+    trainable = sum(p.numel() for p in m.parameters() if p.requires_grad)
+-+    # base shared model should be far below the unshared 172M figure.
+-+    assert trainable < 60_000_000, f"unexpected trainable param count: {trainable}"
+-+
+-+
+-+def test_weight_sharing_disabled_yields_independent_layers():
+-+    m = RPT(
+-+        model_size=ModelSize.mini,
+-+        regression_type="l2",
+-+        classification_type="cross-entropy",
+-+        weight_sharing=False,
+-+    )
+-+    ids = {id(layer) for layer in m.in_context_encoder}
+-+    assert len(ids) == m.config.num_hidden_layers
+-+
+-+
+-+def test_film_init_equivalent_to_sum():
+-+    """FiLM zero-init + column_embeds bias must match sum mode forward output."""
+-+    torch.manual_seed(42)
+-+    m_sum = RPT(
+-+        model_size=ModelSize.mini,
+-+        regression_type="l2",
+-+        classification_type="cross-entropy",
+-+        combination_type="sum",
+-+    )
+-+    m_sum.eval()
+-+
+-+    torch.manual_seed(42)
+-+    m_film = RPT(
+-+        model_size=ModelSize.mini,
+-+        regression_type="l2",
+-+        classification_type="cross-entropy",
+-+        combination_type="film",
+-+    )
+-+    m_film.eval()
+-+    m_film.load_state_dict(m_sum.state_dict(), strict=False)
+-+
+-+    batch = _make_dummy_batch()
+-+    with torch.no_grad():
+-+        out_sum = m_sum.embeddings(batch, is_regression=True)
+-+        out_film = m_film.embeddings(batch, is_regression=True)
+-+    diff = (out_sum - out_film).abs().max().item()
+-+    print(f"sum vs film init max abs diff: {diff:.2e}")
+-+    assert diff < 1e-5, f"FiLM init not equivalent to sum (max diff={diff})"
+-diff --git a/tests/test_qwen3_embedder.py b/tests/test_qwen3_embedder.py
+-new file mode 100644
+-index 0000000..53b6ad5
+---- /dev/null
+-+++ b/tests/test_qwen3_embedder.py
+-@@ -0,0 +1,43 @@
+-+# SPDX-FileCopyrightText: 2025 SAP SE
+-+#
+-+# SPDX-License-Identifier: Apache-2.0
+-+
+-+import os
+-+
+-+import pytest
+-+
+-+
+-+@pytest.mark.skipif(
+-+    not os.environ.get("RUN_QWEN3_TEST"),
+-+    reason="set RUN_QWEN3_TEST=1 to actually download Qwen3 (~1.2GB)",
+-+)
+-+def test_qwen3_embed_shape():
+-+    from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
+-+
+-+    se = SentenceEmbedder("Qwen/Qwen3-Embedding-0.6B", device="cpu")
+-+    emb = se.embed(["hello world", "tabular learning"])
+-+    assert emb.shape == (2, 1024)
+-+
+-+
+-+@pytest.mark.skipif(
+-+    not os.environ.get("RUN_QWEN3_TEST"),
+-+    reason="set RUN_QWEN3_TEST=1 to actually download Qwen3 (~1.2GB)",
+-+)
+-+def test_qwen3_rpt_construction():
+-+    from sap_rpt_oss.constants import ModelSize
+-+    from sap_rpt_oss.data.tokenizer import Tokenizer
+-+    from sap_rpt_oss.model.torch_model import RPT
+-+
+-+    tok = Tokenizer(
+-+        sentence_embedding_model_name="Qwen/Qwen3-Embedding-0.6B",
+-+        sentence_embedder_device="cpu",
+-+    )
+-+    assert tok.embedding_dim == 1024
+-+
+-+    m = RPT(
+-+        model_size=ModelSize.mini,
+-+        sentence_embedding_dim=tok.embedding_dim,
+-+    )
+-+    # adapter shape should be (hidden=256, 1024)
+-+    assert m.embeddings.column_remapping.weight.shape == (256, 1024)
+-+    assert m.embeddings.content_remapping.weight.shape == (256, 1024)
+diff --git a/reports/three_experiment_changelog.md b/reports/three_experiment_changelog.md
+index 0ec78a8..632623b 100644
+--- a/reports/three_experiment_changelog.md
++++ b/reports/three_experiment_changelog.md
+@@ -214,7 +214,7 @@ get_exp2_qwen3_sum_config / get_exp3_qwen3_film_config`。
+ ### Task 11 — 统一启动入口 `sap_rpt_oss/run_experiment.py`
  
--from sap_rpt_oss.constants import ModelSize
-+from sap_rpt_oss.constants import (
-+    ModelSize,
-+    embedding_model_to_dimension_and_pooling,
-+)
+ **关键内容**：
+-- argparse: `--exp {1,2,3}`、`--max-steps N`（dry-run 用）、`--data-root PATH`（覆盖数据路径）。
++- argparse: `--exp {1,2,3}`、`--max-steps N`（dry-run 用）、`--data-root PATH`（覆盖数据路径）、`--no-resume`（关闭自动续训）。
+ - 字典 `EXPERIMENTS` 把 1/2/3 映射到对应 config 工厂函数。
+ - `download_official_ckpt()` 用 `huggingface_hub.hf_hub_download` 下载官方 ckpt：
+   - `repo_id = "SAP/sap-rpt-1-oss"`
+@@ -222,6 +222,33 @@ get_exp2_qwen3_sum_config / get_exp3_qwen3_film_config`。
+ - 仅 Exp 1 使用 `download_official_ckpt`；Exp 2/3 走 `pretrain_from_scratch=True` 分支。
+ - README 末尾追加 "Reproducing the ablation experiments" 章节，给出 3 条命令。
  
- 
--@dataclass(slots=True)
-+# Task 8 uses dataclasses.replace on FinetuneConfig; slots=True can interact
-+# poorly with replace + nested default_factory in some configurations, so we
-+# keep the dataclasses without slots for forward-compatibility.
-+@dataclass
- class TableRulesConfig:
-     """Rules for table filtering, feature pruning, and target selection."""
- 
-     # 去掉唯一值列
-     drop_constant_columns: bool = True
--    # 最大特征数
--    max_num_columns: int = 50
-+    # 最大特征数（与推理侧 MAX_NUM_COLUMNS 对齐，论文 Section 4.1 末段）
-+    max_num_columns: int = 500
-     # 最小行数
-     min_num_rows: int = 150
-     # 缺失值超过这个比例的数值列跳过
-@@ -25,7 +32,7 @@ class TableRulesConfig:
-         return max(0, self.max_num_columns - 1)
- 
- 
--@dataclass(slots=True)
-+@dataclass
- class FinetuneConfig:
-     data_root_path: Path = Path("datasets/t4/datas")
-     output_root_path: Path = Path("outputs/finetune")
-@@ -51,10 +58,17 @@ class FinetuneConfig:
-     gradient_clip_val: float = 1.0
-     log_every_n_steps: int = 50
- 
-+    # Architecture toggles (paper-aligned defaults).
-+    weight_sharing: bool = True
-+    combination_type: str = "sum"  # "sum" (paper) or "film" (Exp 1/3 ablation)
-+    use_weekday: bool = False  # paper does not use weekday in date encoding
-+    sentence_embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
++### Resume from latest checkpoint（默认开启）
 +
-     # Table filtering and target-selection rules aligned with the pretraining setup.
-     table_rules: TableRulesConfig = field(
-         default_factory=lambda: TableRulesConfig(
-             min_num_rows=150,
-+            max_num_columns=500,
-         )
-     )
- 
-@@ -75,6 +89,11 @@ class FinetuneConfig:
- 
-     # Optional curriculum stage 2.
-     curriculum_stage2_data_root_path: Path | None = None
-+    # If set, stage 2 mixes T4 (curriculum_stage2_t4_data_root_path) and the Ma et al.
-+    # data via Bernoulli sampling with p=curriculum_stage2_mixing_ratio (T4 share).
-+    # When None, stage 2 falls back to a single source (curriculum_stage2_data_root_path).
-+    curriculum_stage2_t4_data_root_path: Path | None = None
-+    curriculum_stage2_mixing_ratio: float = 0.8
-     curriculum_stage2_output_root_path: Path = Path(
-         "outputs/finetune/curriculum_stage2"
-     )
-@@ -112,8 +131,14 @@ class FinetuneConfig:
-     def use_curriculum_stage2(self) -> bool:
-         return self.curriculum_stage2_data_root_path is not None
- 
-+    @property
-+    def sentence_embedding_dim(self) -> int:
-+        return embedding_model_to_dimension_and_pooling[
-+            self.sentence_embedding_model_name
-+        ][0]
++**文件**：`sap_rpt_oss/pretrain_run.py`、`sap_rpt_oss/run_experiment.py`
 +
- 
--@dataclass(slots=True)
-+@dataclass
- class InferenceConfigs:
-     checkpoints_path: Path = Path("checkpoints")
-     input_root_path: Path = Path("datasets")
-@@ -122,3 +147,71 @@ class InferenceConfigs:
- 
- FINETUNE_CONFIG = FinetuneConfig()
- INFERENCE_CONFIG = InferenceConfigs()
++**关键 diff**：
++- `pretrain_run.py` 新增 `find_latest_checkpoint(checkpoint_dir, stage_name)`：扫描目录里
++  形如 `{stage_name}-{N}-step.pt` 的文件，按 N 取最大；按 stage_name 过滤避免 stage1 / stage2
++  ckpt 串台。
++- `run_stage` 新增 `start_step: int = 0` 参数；构造 LR scheduler 后用循环 `scheduler.step()`
++  把 warmup 状态推进到对应步；`tqdm(total=max_steps, initial=start_step)` 让进度条从断点
++  显示；`global_step / last_saved_step` 都用 `start_step` 初始化。
++- `run_experiment.py::main` 在构造 model 之前先 `find_latest_checkpoint(checkpoint_dir,
++  stage_name)`：找到则覆盖 `pretrain_from_scratch=False`、把本地 ckpt 路径喂给
++  `build_model_and_tokenizer`、把 N 喂给 `run_stage(start_step=N)`；否则保持原行为
++  （Exp 1 走 HF download，Exp 2/3 走 from-scratch init）。
++- `--no-resume` flag 关闭自动续训，强制冷启动。
++- 边界处理：若 `start_step >= max_steps`，直接 print 提示并 return（避免空进度条死循环或
++  抛"no batches yielded"）。
 +
++**步数预算**（来自工厂函数）：
 +
-+# ----------------------------------------------------------------------------
-+# Task 8 — three-experiment ablation factories
-+# ----------------------------------------------------------------------------
-+def get_paper_aligned_pretrain_config() -> FinetuneConfig:
-+    """ConTextTab paper base configuration: MiniLM-L6 + sum + from-scratch."""
-+    return FinetuneConfig(
-+        pretrain_from_scratch=True,
-+        model_size=ModelSize.base,
-+        weight_sharing=True,
-+        sentence_embedding_model_name="sentence-transformers/all-MiniLM-L6-v2",
-+        combination_type="sum",
-+        use_weekday=False,
-+        learning_rate=1e-4,
-+        warmup_steps=1000,
-+        gradient_clip_val=1.0,
-+        max_steps=8_000_000,
-+        accumulate_grad_batches=256,
-+        stage1_max_num_rows=1000,
-+        query_size_range=(50, 900),
-+        balance_classification_tasks=True,
-+        table_rules=TableRulesConfig(
-+            min_num_rows=150,
-+            max_num_columns=500,
-+            numeric_nan_ratio_threshold=0.5,
-+            categorical_unique_ratio_threshold=0.2,
-+            drop_constant_columns=True,
-+        ),
-+    )
++| Exp | `max_steps` | `warmup_steps` | 说明 |
++| --- | --- | --- | --- |
++| 1 | 200,000 | 2,000 | post-training，明确缩短 |
++| 2 | 8,000,000 | 1,000 | 论文 base 下限（论文范围 4M–10M） |
++| 3 | 8,000,000 | 1,000 | 同 Exp 2 |
 +
-+
-+def get_exp1_minilm_film_config() -> FinetuneConfig:
-+    """Exp 1: MiniLM-L6 + FiLM, post-training from official HF checkpoint."""
-+    cfg = get_paper_aligned_pretrain_config()
-+    return dataclasses.replace(
-+        cfg,
-+        pretrain_from_scratch=False,
-+        resume_checkpoint_path=None,  # downloaded inside run_experiment.py
-+        combination_type="film",
-+        max_steps=200_000,
-+        warmup_steps=2_000,
-+        learning_rate=1e-4,
-+        output_root_path=Path("outputs/exp1_minilm_film"),
-+        checkpoint_root_path=Path("checkpoints/exp1_minilm_film"),
-+    )
-+
-+
-+def get_exp2_qwen3_sum_config() -> FinetuneConfig:
-+    """Exp 2: Qwen3-Embedding-0.6B + sum, T4 from-scratch pretraining."""
-+    cfg = get_paper_aligned_pretrain_config()
-+    return dataclasses.replace(
-+        cfg,
-+        sentence_embedding_model_name="Qwen/Qwen3-Embedding-0.6B",
-+        combination_type="sum",
-+        output_root_path=Path("outputs/exp2_qwen3_sum"),
-+        checkpoint_root_path=Path("checkpoints/exp2_qwen3_sum"),
-+    )
-+
-+
-+def get_exp3_qwen3_film_config() -> FinetuneConfig:
-+    """Exp 3: Qwen3-Embedding-0.6B + FiLM, T4 from-scratch pretraining."""
-+    return dataclasses.replace(
-+        get_exp2_qwen3_sum_config(),
-+        combination_type="film",
-+        output_root_path=Path("outputs/exp3_qwen3_film"),
-+        checkpoint_root_path=Path("checkpoints/exp3_qwen3_film"),
-+    )
-diff --git a/sap_rpt_oss/constants.py b/sap_rpt_oss/constants.py
-index 913b4f8..cc47c8f 100644
---- a/sap_rpt_oss/constants.py
-+++ b/sap_rpt_oss/constants.py
-@@ -10,6 +10,7 @@ embedding_model_to_dimension_and_pooling = {
-     "sentence-transformers/all-MiniLM-L12-v2": (384, "mean"),
-     "intfloat/multilingual-e5-small": (384, "mean"),
-     "Alibaba-NLP/gte-multilingual-base": (768, "cls"),
-+    "Qwen/Qwen3-Embedding-0.6B": (1024, "last_token"),
- }
+ ---
  
- QUANTILE_DIMENSION_DEFAULT = 64
-diff --git a/sap_rpt_oss/data/ds.py b/sap_rpt_oss/data/ds.py
-index 977db17..47b717c 100644
---- a/sap_rpt_oss/data/ds.py
-+++ b/sap_rpt_oss/data/ds.py
-@@ -534,3 +534,48 @@ class RPTParquetDataset(IterableDataset):
- 
-         if not yielded_any and worker_info is None:
-             raise ValueError(f"no eligible parquet tables found under {self.root_dir}")
-+
-+
-+class MixedRPTDataset(IterableDataset):
-+    """Bernoulli-mix two RPTParquetDataset streams.
-+
-+    Each draw selects the primary dataset with probability `mixing_ratio`,
-+    otherwise the secondary. Used for paper Appendix A.4 stage-2 curriculum
-+    where T4 contributes 80% and the Ma et al. data 20%.
-+    """
-+
-+    def __init__(
-+        self,
-+        primary: "RPTParquetDataset",
-+        secondary: "RPTParquetDataset",
-+        mixing_ratio: float = 0.8,
-+        random_seed: int = 42,
-+    ):
-+        super().__init__()
-+        if not 0.0 <= mixing_ratio <= 1.0:
-+            raise ValueError(
-+                f"mixing_ratio must be in [0, 1]; got {mixing_ratio}"
-+            )
-+        self.primary = primary
-+        self.secondary = secondary
-+        self.mixing_ratio = float(mixing_ratio)
-+        self.random_seed = random_seed
-+
-+    def __iter__(self) -> Iterator[dict[str, object]]:
-+        rng = np.random.default_rng(self.random_seed)
-+        it_primary = iter(self.primary)
-+        it_secondary = iter(self.secondary)
-+        while True:
-+            pick_primary = rng.random() < self.mixing_ratio
-+            try:
-+                if pick_primary:
-+                    yield next(it_primary)
-+                else:
-+                    yield next(it_secondary)
-+            except StopIteration:
-+                # fall back to the other stream so training does not stall when
-+                # one dataset finishes first
-+                try:
-+                    yield next(it_secondary if pick_primary else it_primary)
-+                except StopIteration:
-+                    return
-diff --git a/sap_rpt_oss/data/sentence_embedder.py b/sap_rpt_oss/data/sentence_embedder.py
-index eed0b0c..f07c4f5 100644
---- a/sap_rpt_oss/data/sentence_embedder.py
-+++ b/sap_rpt_oss/data/sentence_embedder.py
-@@ -20,6 +20,10 @@ class SentenceEmbedder:
-         )
-         self.batch_size = batch_size
-         self.tokenizer = AutoTokenizer.from_pretrained(sentence_embedding_model_name)
-+        if self.pooling_method == "last_token":
-+            # Qwen3-Embedding officially recommends left-padding so that the last
-+            # position always corresponds to the final non-pad token.
-+            self.tokenizer.padding_side = "left"
-         if device is None:
-             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-         else:
-@@ -50,6 +54,14 @@ class SentenceEmbedder:
-             return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
-                 input_mask_expanded.sum(1), min=1e-9
-             )
-+        if self.pooling_method == "last_token":
-+            if self.tokenizer.padding_side == "left":
-+                return token_embeddings[:, -1].type(token_embeddings.dtype)
-+            seq_lengths = attention_mask.sum(dim=1) - 1
-+            batch_size = token_embeddings.size(0)
-+            return token_embeddings[
-+                torch.arange(batch_size, device=token_embeddings.device), seq_lengths
-+            ].type(token_embeddings.dtype)
-         assert self.pooling_method == "cls"
-         return token_embeddings[:, 0].type(token_embeddings.dtype)
- 
-diff --git a/sap_rpt_oss/data/tokenizer.py b/sap_rpt_oss/data/tokenizer.py
-index ca2b1a0..62e5bc9 100644
---- a/sap_rpt_oss/data/tokenizer.py
-+++ b/sap_rpt_oss/data/tokenizer.py
-@@ -4,6 +4,7 @@
- 
- import datetime
- import os
-+import warnings
- from typing import Collection, Literal, Optional, Union
- 
- import numpy as np
-@@ -19,12 +20,17 @@ from sap_rpt_oss.constants import (
- from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
- from sap_rpt_oss.utils.lru_cache import LRU_Cache
- 
-+DEFAULT_SENTENCE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-+
- 
- class Tokenizer:
-     QUANTILE_DIMENSION = QUANTILE_DIMENSION_DEFAULT
--    sentence_embedding_model_name = "sentence-transformers/all-MiniLM-L12-v2"
-+    # Kept for backwards-compatibility with older external code that reads the
-+    # class attribute. The instance attribute (set in __init__) is the source
-+    # of truth.
-+    sentence_embedding_model_name = DEFAULT_SENTENCE_EMBEDDING_MODEL
-     embedding_dim = embedding_model_to_dimension_and_pooling[
--        sentence_embedding_model_name
-+        DEFAULT_SENTENCE_EMBEDDING_MODEL
-     ][0]
- 
-     def __init__(
-@@ -35,7 +41,9 @@ class Tokenizer:
-         ] = "cross-entropy",
-         num_regression_bins=16,
-         random_seed=None,
--        is_valid=False,
-+        is_valid: Optional[bool] = None,
-+        clip_quantile: float = 0.02,
-+        sentence_embedding_model_name: str = DEFAULT_SENTENCE_EMBEDDING_MODEL,
-         sentence_embedder_device: Optional[Union[str, torch.device]] = None,
-         verbose: bool = True,
-     ):
-@@ -43,9 +51,34 @@ class Tokenizer:
-         self.classification_type = classification_type
-         self.random_seed = random_seed
-         self.num_regression_bins = num_regression_bins
--        self.is_valid = is_valid
-         self.verbose = verbose
- 
-+        if is_valid is not None:
-+            warnings.warn(
-+                "Tokenizer(is_valid=...) is deprecated; pass clip_quantile instead. "
-+                "is_valid=True is equivalent to clip_quantile=0.005 and "
-+                "is_valid=False to clip_quantile=0.02.",
-+                DeprecationWarning,
-+                stacklevel=2,
-+            )
-+            clip_quantile = 0.005 if is_valid else 0.02
-+        self.is_valid = bool(is_valid) if is_valid is not None else False
-+        if not 0.0 <= clip_quantile < 0.5:
-+            raise ValueError(
-+                f"clip_quantile must be in [0, 0.5); got {clip_quantile}"
-+            )
-+        self.clip_quantile = float(clip_quantile)
-+
-+        if sentence_embedding_model_name not in embedding_model_to_dimension_and_pooling:
-+            raise ValueError(
-+                f"Unknown sentence embedding model: {sentence_embedding_model_name}. "
-+                f"Known models: {list(embedding_model_to_dimension_and_pooling)}"
-+            )
-+        self.sentence_embedding_model_name = sentence_embedding_model_name
-+        self.embedding_dim = embedding_model_to_dimension_and_pooling[
-+            sentence_embedding_model_name
-+        ][0]
-+
-         self.sentence_embedder = SentenceEmbedder(
-             self.sentence_embedding_model_name,
-             device=sentence_embedder_device,
-@@ -108,12 +141,10 @@ class Tokenizer:
-             labels = np.zeros(total_rows, dtype=np.float32)
-             return labels, torch.tensor(0.0), torch.tensor(1.0)
- 
--        if self.is_valid:
--            # remove outliers below 0.5th percentile and above 99.5th percentile
--            vmin, vmax = np.nanquantile(train_data, [0.005, 0.995])
--        else:
--            # remove outliers below 2th percentile and above 98th percentile
--            vmin, vmax = np.nanpercentile(train_data, [2, 98])
-+        # Clip outliers between [clip_quantile, 1 - clip_quantile] (paper Section 3.1
-+        # uses 2% / 98% for pretraining; inference path uses 0.5% / 99.5%).
-+        q_lo, q_hi = self.clip_quantile, 1.0 - self.clip_quantile
-+        vmin, vmax = np.nanquantile(train_data, [q_lo, q_hi])
-         train_data = np.clip(train_data, vmin, vmax)
-         test_data = np.clip(test_data, vmin, vmax)
- 
-diff --git a/sap_rpt_oss/model/embeddings.py b/sap_rpt_oss/model/embeddings.py
-index f589f58..57ef47c 100644
---- a/sap_rpt_oss/model/embeddings.py
-+++ b/sap_rpt_oss/model/embeddings.py
-@@ -2,7 +2,7 @@
- #
- # SPDX-License-Identifier: Apache-2.0
- 
--from typing import Dict, Literal
-+from typing import Dict, Literal, Optional
- 
- import torch
- from torch import nn
-@@ -11,21 +11,49 @@ from sap_rpt_oss.data.tokenizer import Tokenizer
- 
- 
- class DateEmbeddings(nn.Module):
--    def __init__(self, hidden_size):
-+    def __init__(self, hidden_size, use_weekday: bool = False):
-         super().__init__()
-         self.year_embeddings = nn.Embedding(52, hidden_size)
-         self.month_embeddings = nn.Embedding(13, hidden_size)
-         self.day_embeddings = nn.Embedding(32, hidden_size)
-+        # weekday_embeddings is always constructed (so checkpoints stay loadable),
-+        # but only contributes to the forward pass when use_weekday=True.
-         self.weekday_embeddings = nn.Embedding(8, hidden_size)
-+        self.use_weekday = use_weekday
- 
-     def forward(self, date_year_month_day_weekday):
-         # date_year_month_day_weekday has shape (num_rows, num_cols, 4)
-         year_embeds = self.year_embeddings(date_year_month_day_weekday[:, :, 0])
-         month_embeds = self.month_embeddings(date_year_month_day_weekday[:, :, 1])
-         day_embeds = self.day_embeddings(date_year_month_day_weekday[:, :, 2])
--        weekday_embeds = self.weekday_embeddings(date_year_month_day_weekday[:, :, 3])
-+        out = year_embeds + month_embeds + day_embeds
-+        if self.use_weekday:
-+            out = out + self.weekday_embeddings(date_year_month_day_weekday[:, :, 3])
-+        return out
- 
--        return year_embeds + month_embeds + day_embeds + weekday_embeds
-+
-+class FiLMGenerator(nn.Module):
-+    """Generates per-column (gamma, beta) from column header embeddings.
-+
-+    Zero-init on proj2 ensures gamma starts at 1 and beta at 0, so the FiLM
-+    output equals the unmodulated cell sum at initialization. Combined with
-+    additively reattaching column_embeds in CellEmbeddings.forward, this gives
-+    a forward pass strictly equivalent to combination_type="sum" at init time
-+    so post-training from a sum-trained checkpoint starts from a smooth point.
-+    """
-+
-+    def __init__(self, hidden_size: int):
-+        super().__init__()
-+        self.proj1 = nn.Linear(hidden_size, hidden_size)
-+        self.proj2 = nn.Linear(hidden_size, 2 * hidden_size)
-+        nn.init.zeros_(self.proj2.weight)
-+        nn.init.zeros_(self.proj2.bias)
-+
-+    def forward(self, column_embeds):
-+        h = torch.nn.functional.gelu(self.proj1(column_embeds))
-+        gamma_beta = self.proj2(h)
-+        gamma, beta = gamma_beta.chunk(2, dim=-1)
-+        return 1.0 + gamma, beta
- 
- 
- class CellEmbeddings(nn.Module):
-@@ -45,9 +73,17 @@ class CellEmbeddings(nn.Module):
-         config,
-         regression_type: Literal["reg-as-classif", "l2"] = "reg-as-classif",
-         is_target_content_mapping: bool = False,
-+        sentence_embedding_dim: Optional[int] = None,
-+        combination_type: Literal["sum", "film"] = "sum",
-+        use_weekday: bool = False,
-     ):
-         super().__init__()
-         self.hidden_size = config.hidden_size
-+        if sentence_embedding_dim is None:
-+            sentence_embedding_dim = Tokenizer.embedding_dim
-+        self.sentence_embedding_dim = sentence_embedding_dim
-+        self.combination_type = combination_type
-+
-         if regression_type == "l2":
-             self.number_embeddings = nn.Linear(1, config.hidden_size)
-         else:
-@@ -69,15 +105,18 @@ class CellEmbeddings(nn.Module):
-             Tokenizer.QUANTILE_DIMENSION, config.hidden_size
-         )
- 
--        self.date_embeddings = DateEmbeddings(config.hidden_size)
-+        self.date_embeddings = DateEmbeddings(config.hidden_size, use_weekday=use_weekday)
- 
--        self.column_remapping = nn.Linear(Tokenizer.embedding_dim, config.hidden_size)
--        self.content_remapping = nn.Linear(Tokenizer.embedding_dim, config.hidden_size)
-+        self.column_remapping = nn.Linear(sentence_embedding_dim, config.hidden_size)
-+        self.content_remapping = nn.Linear(sentence_embedding_dim, config.hidden_size)
-         if self.is_target_content_mapping:
-             self.target_content_remapping = nn.Linear(
--                Tokenizer.embedding_dim, config.hidden_size
-+                sentence_embedding_dim, config.hidden_size
-             )
- 
-+        if self.combination_type == "film":
-+            self.film = FiLMGenerator(config.hidden_size)
-+
-         self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-         self.dropout = nn.Dropout(config.hidden_dropout_prob)
- 
-@@ -153,7 +192,17 @@ class CellEmbeddings(nn.Module):
-                 0  # zero out to remove bias from `content_remapping` layer
-             )
- 
--        input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
-+        if self.combination_type == "film":
-+            cell_sum = content_embeds + number_embeds + date_embeds
-+            gamma, beta = self.film(column_embeds)
-+            gamma = gamma.type(cell_sum.dtype)
-+            beta = beta.type(cell_sum.dtype)
-+            # column_embeds is added back as a bias term so that with the FiLM
-+            # generator zero-initialised (gamma=1, beta=0) this branch matches
-+            # the sum branch element-wise — see FiLMGenerator docstring.
-+            input_embeds = gamma * cell_sum + beta + column_embeds
-+        else:
-+            input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
- 
-         if is_classification and self.is_target_content_mapping:
-             # use the text embeddings, but pass them through a dedicated linear layer for the target column
-diff --git a/sap_rpt_oss/model/torch_model.py b/sap_rpt_oss/model/torch_model.py
-index 70dcc56..c2e9c6e 100644
---- a/sap_rpt_oss/model/torch_model.py
-+++ b/sap_rpt_oss/model/torch_model.py
-@@ -49,6 +49,11 @@ class RPT(nn.Module, ModuleUtilsMixin):
-             "cross-entropy", "clustering", "clustering-cosine"
-         ] = "cross-entropy",
-         checkpointing_segments=1,
-+        weight_sharing: bool = True,
-+        combination_type: Literal["sum", "film"] = "sum",
-+        use_weekday: bool = False,
-+        sentence_embedding_dim: int = 384,
-+        verbose: bool = False,
-         **kwargs,
-     ):
-         super().__init__()
-@@ -64,6 +69,10 @@ class RPT(nn.Module, ModuleUtilsMixin):
-         )
-         self.regression_type = regression_type
-         self.classification_type = classification_type
-+        self.weight_sharing = weight_sharing
-+        self.combination_type = combination_type
-+        self.use_weekday = use_weekday
-+        self.sentence_embedding_dim = sentence_embedding_dim
-         max_number_of_labels = Tokenizer.QUANTILE_DIMENSION
- 
-         if self.classification_type in ["clustering", "clustering-cosine"]:
-@@ -99,13 +108,34 @@ class RPT(nn.Module, ModuleUtilsMixin):
-             self.config,
-             regression_type=regression_type,
-             is_target_content_mapping=(classification_type != "cross-entropy"),
-+            sentence_embedding_dim=sentence_embedding_dim,
-+            combination_type=combination_type,
-+            use_weekday=use_weekday,
-         )
--        self.in_context_encoder = nn.ModuleList(
--            [
--                TwoDimensionalAttentionLayer(self.config)
--                for _ in range(self.config.num_hidden_layers)
--            ]
--        )
-+        if weight_sharing:
-+            shared_layer = TwoDimensionalAttentionLayer(self.config)
-+            # ModuleList with repeated references — PyTorch correctly shares
-+            # parameters across all positions, so the in-context encoder is a
-+            # single physical layer applied num_hidden_layers times.
-+            self.in_context_encoder = nn.ModuleList(
-+                [shared_layer] * self.config.num_hidden_layers
-+            )
-+        else:
-+            self.in_context_encoder = nn.ModuleList(
-+                [
-+                    TwoDimensionalAttentionLayer(self.config)
-+                    for _ in range(self.config.num_hidden_layers)
-+                ]
-+            )
-+
-+        if verbose:
-+            trainable = sum(
-+                p.numel() for p in self.parameters() if p.requires_grad
-+            )
-+            print(
-+                f"[RPT] weight_sharing={weight_sharing} combination_type={combination_type} "
-+                f"trainable_params={trainable:,}"
-+            )
- 
-     @staticmethod
-     def build_context_attention_mask(data, device):
-@@ -567,8 +597,26 @@ class RPT(nn.Module, ModuleUtilsMixin):
-             self._extract_state_dict(checkpoint)
-         )
- 
-+        # In FiLM mode the checkpoint may have been trained with combination_type="sum"
-+        # and so will not contain `embeddings.film.*` keys. We accept missing keys
-+        # only for the FiLM module — anything else is still a real load error.
-+        is_film = getattr(self, "combination_type", "sum") == "film"
-+
-+        def _load(sd):
-+            if is_film:
-+                missing, unexpected = self.load_state_dict(sd, strict=False)
-+                non_film_missing = [k for k in missing if not k.startswith("embeddings.film.")]
-+                if non_film_missing or unexpected:
-+                    raise RuntimeError(
-+                        f"strict=False load failed beyond FiLM: missing={non_film_missing}, "
-+                        f"unexpected={list(unexpected)}"
-+                    )
-+                print("FiLM parameters initialized from scratch (not in checkpoint).")
-+            else:
-+                self.load_state_dict(sd)
-+
-         try:
--            self.load_state_dict(state_dict)
-+            _load(state_dict)
-             return
-         except RuntimeError as load_error:
-             if not is_copy_last_layer:
-@@ -578,7 +626,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
- 
-         copied_state_dict = self.copy_last_layer_weights_to_all(dict(state_dict))
-         try:
--            self.load_state_dict(copied_state_dict)
-+            _load(copied_state_dict)
-         except RuntimeError as copied_load_error:
-             raise RuntimeError(
-                 "Failed to load weights after normalizing checkpoint keys and "
+ ## 不变性 / 兼容性回归点
 diff --git a/sap_rpt_oss/pretrain_run.py b/sap_rpt_oss/pretrain_run.py
-index 8ee503b..a7f9454 100644
+index a7f9454..4c681cf 100644
 --- a/sap_rpt_oss/pretrain_run.py
 +++ b/sap_rpt_oss/pretrain_run.py
-@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
- from tqdm.auto import tqdm
- 
- from sap_rpt_oss.configs import FINETUNE_CONFIG, FinetuneConfig
--from sap_rpt_oss.data.ds import RPTParquetDataset
-+from sap_rpt_oss.data.ds import MixedRPTDataset, RPTParquetDataset
- from sap_rpt_oss.data.tokenizer import Tokenizer
- from sap_rpt_oss.model.torch_model import RPT
- 
-@@ -48,13 +48,13 @@ def initialize_model_weights(model: RPT):
-     model.apply(reset_module_parameters)
+@@ -1,4 +1,5 @@
+ import random
++import re
+ from contextlib import nullcontext
+ from pathlib import Path
+ from typing import Optional
+@@ -172,6 +173,38 @@ def save_model_weights(
+     return checkpoint_path
  
  
--def build_dataloader(
-+def _build_single_dataset(
++_CHECKPOINT_FILE_PATTERN = re.compile(r"^(?P<stage>.+?)-(?P<step>\d+)-step\.pt$")
++
++
++def find_latest_checkpoint(
++    checkpoint_dir: Path, stage_name: Optional[str] = None
++) -> tuple[Optional[Path], int]:
++    """Return the (path, step) pair of the highest-step `*-N-step.pt` in
++    `checkpoint_dir`, or (None, 0) if no checkpoint exists. If `stage_name` is
++    given, only files whose prefix matches are considered (so stage-1 and
++    stage-2 ckpts written to the same dir don't get mixed up)."""
++    if not checkpoint_dir.exists():
++        return None, 0
++
++    best_path: Optional[Path] = None
++    best_step = -1
++    for entry in checkpoint_dir.iterdir():
++        if not entry.is_file():
++            continue
++        match = _CHECKPOINT_FILE_PATTERN.match(entry.name)
++        if not match:
++            continue
++        if stage_name is not None and match.group("stage") != stage_name:
++            continue
++        step = int(match.group("step"))
++        if step > best_step:
++            best_step = step
++            best_path = entry
++    if best_path is None:
++        return None, 0
++    return best_path, best_step
++
++
+ def run_stage(
      config: FinetuneConfig,
-     tokenizer: Tokenizer,
-     data_root: Path,
-     max_num_rows: int,
--) -> DataLoader:
--    dataset = RPTParquetDataset(
-+) -> RPTParquetDataset:
-+    return RPTParquetDataset(
-         root_dir=data_root,
-         fit_size=None,
-         tokenizer=tokenizer,
-@@ -72,6 +72,27 @@ def build_dataloader(
-         table_rules=config.table_rules,
-     )
- 
-+
-+def build_dataloader(
-+    config: FinetuneConfig,
-+    tokenizer: Tokenizer,
-+    data_root: Path,
-+    max_num_rows: int,
-+    secondary_data_root: Optional[Path] = None,
-+    mixing_ratio: float = 0.8,
-+) -> DataLoader:
-+    dataset = _build_single_dataset(config, tokenizer, data_root, max_num_rows)
-+    if secondary_data_root is not None:
-+        secondary = _build_single_dataset(
-+            config, tokenizer, secondary_data_root, max_num_rows
-+        )
-+        dataset = MixedRPTDataset(
-+            primary=dataset,
-+            secondary=secondary,
-+            mixing_ratio=mixing_ratio,
-+            random_seed=config.random_seed,
-+        )
-+
-     dataloader_kwargs = {
-         "batch_size": None,
-         "num_workers": config.num_workers,
-@@ -85,10 +106,31 @@ def build_model_and_tokenizer(
-     config: FinetuneConfig,
-     checkpoint: Optional[Path],
- ):
-+    tokenizer_device = (
-+        "cpu"
-+        if config.num_workers > 0
-+        else ("cuda" if torch.cuda.is_available() else "cpu")
-+    )
-+    tokenizer = Tokenizer(
-+        regression_type="l2",
-+        classification_type="cross-entropy",
-+        random_seed=config.random_seed,
-+        num_regression_bins=16,
-+        clip_quantile=0.02,  # paper Section 3.1 — pretraining uses 2/98 quantile clipping
-+        sentence_embedding_model_name=config.sentence_embedding_model_name,
-+        sentence_embedder_device=tokenizer_device,
-+        verbose=False,
-+    )
-+
-     model = RPT(
-         model_size=config.model_size,
-         regression_type="l2",
-         classification_type="cross-entropy",
-+        weight_sharing=config.weight_sharing,
-+        combination_type=config.combination_type,
-+        use_weekday=config.use_weekday,
-+        sentence_embedding_dim=tokenizer.embedding_dim,
-+        verbose=True,
-     )
-     if config.pretrain_from_scratch:
-         initialize_model_weights(model)
-@@ -99,20 +141,6 @@ def build_model_and_tokenizer(
-             "resume_checkpoint_path must be set when pretrain_from_scratch is False"
-         )
- 
--    tokenizer_device = (
--        "cpu"
--        if config.num_workers > 0
--        else ("cuda" if torch.cuda.is_available() else "cpu")
--    )
--    tokenizer = Tokenizer(
--        regression_type="l2",
--        classification_type="cross-entropy",
--        random_seed=config.random_seed,
--        num_regression_bins=16,
--        is_valid=True,
--        sentence_embedder_device=tokenizer_device,
--        verbose=False,
--    )
-     return model, tokenizer
- 
- 
-@@ -152,6 +180,8 @@ def run_stage(
-     output_root: Path,
-     max_num_rows: int,
+     model: RPT,
+@@ -182,6 +215,7 @@ def run_stage(
      max_steps: int,
-+    secondary_data_root: Optional[Path] = None,
-+    mixing_ratio: float = 0.8,
+     secondary_data_root: Optional[Path] = None,
+     mixing_ratio: float = 0.8,
++    start_step: int = 0,
  ):
      output_root.mkdir(parents=True, exist_ok=True)
      device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-@@ -165,6 +195,8 @@ def run_stage(
-         tokenizer=tokenizer,
-         data_root=data_root,
-         max_num_rows=max_num_rows,
-+        secondary_data_root=secondary_data_root,
-+        mixing_ratio=mixing_ratio,
+@@ -199,17 +233,23 @@ def run_stage(
+         mixing_ratio=mixing_ratio,
      )
      optimizer, scheduler = build_optimizer_and_scheduler(model, config)
++    # Fast-forward LR scheduler so warmup/decay state matches resumed step.
++    if scheduler is not None and start_step > 0:
++        for _ in range(start_step):
++            scheduler.step()
      model.to(device)
-@@ -290,14 +322,26 @@ def main():
+     model.train()
+     optimizer.zero_grad(set_to_none=True)
+ 
+     checkpoint_dir = config.resolved_checkpoint_dir
+     stage_name = output_root.name.replace("/", "_")
+-    progress = tqdm(total=max_steps, desc=stage_name, unit="step")
++    progress = tqdm(
++        total=max_steps, desc=stage_name, unit="step", initial=start_step
++    )
+ 
+-    global_step = 0
++    global_step = start_step
+     pending_batches = 0
+-    last_saved_step = 0
++    last_saved_step = start_step
+     accumulation_steps = config.resolved_accumulate_grad_batches
+     last_loss = 0.0
+     last_metric = 0.0
+diff --git a/sap_rpt_oss/run_experiment.py b/sap_rpt_oss/run_experiment.py
+index b51f0f6..efd512d 100644
+--- a/sap_rpt_oss/run_experiment.py
++++ b/sap_rpt_oss/run_experiment.py
+@@ -9,6 +9,9 @@ Usage:
+     python -m sap_rpt_oss.run_experiment --exp 1   # MiniLM-L6 + FiLM (post-training)
+     python -m sap_rpt_oss.run_experiment --exp 2   # Qwen3 + sum (from scratch)
+     python -m sap_rpt_oss.run_experiment --exp 3   # Qwen3 + FiLM (from scratch)
++
++By default each invocation auto-resumes from the highest-step checkpoint found
++in the experiment's checkpoint directory; pass --no-resume to start over.
+ """
+ 
+ import argparse
+@@ -26,6 +29,7 @@ from sap_rpt_oss.configs import (
+ )
+ from sap_rpt_oss.pretrain_run import (
+     build_model_and_tokenizer,
++    find_latest_checkpoint,
+     run_stage,
+     seed_everything,
+ )
+@@ -68,6 +72,12 @@ def main():
+         default=None,
+         help="Override the training data root path.",
+     )
++    parser.add_argument(
++        "--no-resume",
++        action="store_true",
++        help="Ignore any local checkpoint and start fresh "
++        "(Exp 1: from official HF ckpt; Exp 2/3: from scratch).",
++    )
+     args = parser.parse_args()
+ 
+     name, config_fn = EXPERIMENTS[args.exp]
+@@ -84,12 +94,37 @@ def main():
+ 
+     seed_everything(config.random_seed)
+ 
++    # Stage name is derived from output_root.name in run_stage; mirror it here so
++    # find_latest_checkpoint scopes to this experiment's files only.
++    stage_name = config.output_root_path.name.replace("/", "_")
++    checkpoint_dir = config.resolved_checkpoint_dir
++
+     initial_checkpoint: Optional[Path] = None
+-    if not config.pretrain_from_scratch:
+-        # Exp 1: post-training from the official HF checkpoint.
++    start_step = 0
++    if not args.no_resume:
++        latest_path, latest_step = find_latest_checkpoint(checkpoint_dir, stage_name)
++        if latest_path is not None:
++            print(
++                f"[run_experiment] Resuming from {latest_path} (step={latest_step})"
++            )
++            # Make build_model_and_tokenizer load the local ckpt instead of
++            # initializing from scratch / re-downloading from HF.
++            config = dataclasses.replace(config, pretrain_from_scratch=False)
++            initial_checkpoint = latest_path
++            start_step = latest_step
++
++    if initial_checkpoint is None and not config.pretrain_from_scratch:
++        # Exp 1 cold start: post-training from the official HF checkpoint.
+         initial_checkpoint = download_official_ckpt()
+         print(f"[run_experiment] Loading official checkpoint from {initial_checkpoint}")
+ 
++    if start_step >= config.max_steps:
++        print(
++            f"[run_experiment] start_step={start_step} >= max_steps={config.max_steps}; "
++            "nothing to do."
++        )
++        return
++
+     model, tokenizer = build_model_and_tokenizer(
+         config=config, checkpoint=initial_checkpoint
+     )
+@@ -101,6 +136,7 @@ def main():
+         output_root=config.output_root_path,
+         max_num_rows=config.stage1_max_num_rows,
+         max_steps=config.max_steps,
++        start_step=start_step,
      )
  
-     if config.use_curriculum_stage2:
-+        # Paper Appendix A.4 mixes T4 (80%) with the Ma et al. data (20%) in
-+        # stage 2. Primary stream is T4 (defaults to the stage-1 data root if
-+        # curriculum_stage2_t4_data_root_path is unset), secondary is Ma et al.
-+        # (curriculum_stage2_data_root_path).
-+        t4_root = Path(
-+            config.curriculum_stage2_t4_data_root_path
-+            if config.curriculum_stage2_t4_data_root_path is not None
-+            else config.data_root_path
-+        )
-+        ma_root = Path(config.curriculum_stage2_data_root_path)
-         run_stage(
-             config=config,
-             model=model,
-             tokenizer=tokenizer,
--            data_root=Path(config.curriculum_stage2_data_root_path),
-+            data_root=t4_root,
-             output_root=config.curriculum_stage2_output_root_path,
-             max_num_rows=config.curriculum_stage2_max_num_rows,
-             max_steps=config.curriculum_stage2_max_steps,
-+            secondary_data_root=ma_root,
-+            mixing_ratio=config.curriculum_stage2_mixing_ratio,
-         )
  
- 
-diff --git a/sap_rpt_oss/rpt.py b/sap_rpt_oss/rpt.py
-index 7afde80..87e3c23 100644
---- a/sap_rpt_oss/rpt.py
-+++ b/sap_rpt_oss/rpt.py
-@@ -155,12 +155,16 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
-         self.model.load_weights(Path(self._checkpoint_path), self.device)
-         self.seed = 42
-         self.drop_constant_columns = drop_constant_columns
-+        # Inference uses tighter outlier clipping (0.5%/99.5%) than pretraining
-+        # (paper Section 4.1, "selected based on outlier analysis on downstream
-+        # tasks"). is_valid kept for backward-compat as the public arg.
-+        clip_quantile = 0.005 if is_valid else 0.02
-         self.tokenizer = Tokenizer(
-             regression_type=self.regression_type,
-             classification_type=self.classification_type,
-             random_seed=self.seed,
-             num_regression_bins=self.num_regression_bins,
--            is_valid=is_valid,
-+            clip_quantile=clip_quantile,
-         )
-         self.model.to(self.device).eval()
- 
-diff --git a/sap_rpt_oss/run_experiment.py b/sap_rpt_oss/run_experiment.py
-new file mode 100644
-index 0000000..b51f0f6
---- /dev/null
-+++ b/sap_rpt_oss/run_experiment.py
-@@ -0,0 +1,108 @@
-+# SPDX-FileCopyrightText: 2025 SAP SE
-+#
-+# SPDX-License-Identifier: Apache-2.0
-+
-+"""
-+Unified launcher for the three ablation experiments.
-+
-+Usage:
-+    python -m sap_rpt_oss.run_experiment --exp 1   # MiniLM-L6 + FiLM (post-training)
-+    python -m sap_rpt_oss.run_experiment --exp 2   # Qwen3 + sum (from scratch)
-+    python -m sap_rpt_oss.run_experiment --exp 3   # Qwen3 + FiLM (from scratch)
-+"""
-+
-+import argparse
-+import dataclasses
-+from pathlib import Path
-+from typing import Optional
-+
-+from huggingface_hub import hf_hub_download
-+
-+from sap_rpt_oss.configs import (
-+    FinetuneConfig,
-+    get_exp1_minilm_film_config,
-+    get_exp2_qwen3_sum_config,
-+    get_exp3_qwen3_film_config,
-+)
-+from sap_rpt_oss.pretrain_run import (
-+    build_model_and_tokenizer,
-+    run_stage,
-+    seed_everything,
-+)
-+
-+
-+EXPERIMENTS = {
-+    1: ("Exp 1: MiniLM-L6 + FiLM (post-training)", get_exp1_minilm_film_config),
-+    2: ("Exp 2: Qwen3 + sum (from scratch)", get_exp2_qwen3_sum_config),
-+    3: ("Exp 3: Qwen3 + FiLM (from scratch)", get_exp3_qwen3_film_config),
-+}
-+
-+# The official HF checkpoint filename. Verified by listing repo files via the
-+# huggingface_hub API at the time of writing; update here if SAP renames.
-+OFFICIAL_CHECKPOINT_FILENAME = "2025-11-04_sap-rpt-one-oss.pt"
-+OFFICIAL_CHECKPOINT_REPO = "SAP/sap-rpt-1-oss"
-+
-+
-+def download_official_ckpt() -> Path:
-+    """Download the official sap/sap-rpt-1-oss weight-shared checkpoint."""
-+    return Path(
-+        hf_hub_download(
-+            repo_id=OFFICIAL_CHECKPOINT_REPO,
-+            filename=OFFICIAL_CHECKPOINT_FILENAME,
-+        )
-+    )
-+
-+
-+def main():
-+    parser = argparse.ArgumentParser()
-+    parser.add_argument("--exp", type=int, choices=[1, 2, 3], required=True)
-+    parser.add_argument(
-+        "--max-steps",
-+        type=int,
-+        default=None,
-+        help="Override default max_steps (useful for dry-runs).",
-+    )
-+    parser.add_argument(
-+        "--data-root",
-+        type=str,
-+        default=None,
-+        help="Override the training data root path.",
-+    )
-+    args = parser.parse_args()
-+
-+    name, config_fn = EXPERIMENTS[args.exp]
-+    print(f"[run_experiment] Starting {name}")
-+
-+    config: FinetuneConfig = config_fn()
-+    overrides = {}
-+    if args.max_steps is not None:
-+        overrides["max_steps"] = args.max_steps
-+    if args.data_root is not None:
-+        overrides["data_root_path"] = Path(args.data_root)
-+    if overrides:
-+        config = dataclasses.replace(config, **overrides)
-+
-+    seed_everything(config.random_seed)
-+
-+    initial_checkpoint: Optional[Path] = None
-+    if not config.pretrain_from_scratch:
-+        # Exp 1: post-training from the official HF checkpoint.
-+        initial_checkpoint = download_official_ckpt()
-+        print(f"[run_experiment] Loading official checkpoint from {initial_checkpoint}")
-+
-+    model, tokenizer = build_model_and_tokenizer(
-+        config=config, checkpoint=initial_checkpoint
-+    )
-+    run_stage(
-+        config=config,
-+        model=model,
-+        tokenizer=tokenizer,
-+        data_root=config.data_root_path,
-+        output_root=config.output_root_path,
-+        max_num_rows=config.stage1_max_num_rows,
-+        max_steps=config.max_steps,
-+    )
-+
-+
-+if __name__ == "__main__":
-+    main()
-diff --git a/tests/__init__.py b/tests/__init__.py
-new file mode 100644
-index 0000000..e69de29
-diff --git a/tests/test_film_ablation.py b/tests/test_film_ablation.py
-new file mode 100644
-index 0000000..84e3f34
---- /dev/null
-+++ b/tests/test_film_ablation.py
-@@ -0,0 +1,86 @@
-+# SPDX-FileCopyrightText: 2025 SAP SE
-+#
-+# SPDX-License-Identifier: Apache-2.0
-+
-+import torch
-+
-+from sap_rpt_oss.constants import ModelSize
-+from sap_rpt_oss.model.torch_model import RPT
-+
-+
-+def _make_dummy_batch(num_rows: int = 8, num_cols: int = 4, embed_dim: int = 384):
-+    return {
-+        "column_embeddings": torch.randn(num_cols, embed_dim, dtype=torch.float16),
-+        "text_embeddings": torch.zeros(
-+            num_rows, num_cols, embed_dim, dtype=torch.float16
-+        ),
-+        "date_year_month_day_weekday": torch.zeros(
-+            num_rows, num_cols, 4, dtype=torch.long
-+        ),
-+        "number_normalized": torch.randn(num_rows, num_cols),
-+        "target": torch.zeros(num_rows),
-+        "target_delta": torch.zeros(num_rows),
-+    }
-+
-+
-+def test_sum_default_no_film_module():
-+    m = RPT(
-+        model_size=ModelSize.mini,
-+        regression_type="l2",
-+        classification_type="cross-entropy",
-+    )
-+    assert not hasattr(m.embeddings, "film") or m.embeddings.film is None
-+
-+
-+def test_weight_sharing_active_by_default():
-+    m = RPT(
-+        model_size=ModelSize.base,
-+        regression_type="l2",
-+        classification_type="cross-entropy",
-+    )
-+    ids = {id(layer) for layer in m.in_context_encoder}
-+    assert len(ids) == 1, "weight sharing not active"
-+    trainable = sum(p.numel() for p in m.parameters() if p.requires_grad)
-+    # base shared model should be far below the unshared 172M figure.
-+    assert trainable < 60_000_000, f"unexpected trainable param count: {trainable}"
-+
-+
-+def test_weight_sharing_disabled_yields_independent_layers():
-+    m = RPT(
-+        model_size=ModelSize.mini,
-+        regression_type="l2",
-+        classification_type="cross-entropy",
-+        weight_sharing=False,
-+    )
-+    ids = {id(layer) for layer in m.in_context_encoder}
-+    assert len(ids) == m.config.num_hidden_layers
-+
-+
-+def test_film_init_equivalent_to_sum():
-+    """FiLM zero-init + column_embeds bias must match sum mode forward output."""
-+    torch.manual_seed(42)
-+    m_sum = RPT(
-+        model_size=ModelSize.mini,
-+        regression_type="l2",
-+        classification_type="cross-entropy",
-+        combination_type="sum",
-+    )
-+    m_sum.eval()
-+
-+    torch.manual_seed(42)
-+    m_film = RPT(
-+        model_size=ModelSize.mini,
-+        regression_type="l2",
-+        classification_type="cross-entropy",
-+        combination_type="film",
-+    )
-+    m_film.eval()
-+    m_film.load_state_dict(m_sum.state_dict(), strict=False)
-+
-+    batch = _make_dummy_batch()
-+    with torch.no_grad():
-+        out_sum = m_sum.embeddings(batch, is_regression=True)
-+        out_film = m_film.embeddings(batch, is_regression=True)
-+    diff = (out_sum - out_film).abs().max().item()
-+    print(f"sum vs film init max abs diff: {diff:.2e}")
-+    assert diff < 1e-5, f"FiLM init not equivalent to sum (max diff={diff})"
-diff --git a/tests/test_qwen3_embedder.py b/tests/test_qwen3_embedder.py
-new file mode 100644
-index 0000000..53b6ad5
---- /dev/null
-+++ b/tests/test_qwen3_embedder.py
-@@ -0,0 +1,43 @@
-+# SPDX-FileCopyrightText: 2025 SAP SE
-+#
-+# SPDX-License-Identifier: Apache-2.0
-+
-+import os
-+
-+import pytest
-+
-+
-+@pytest.mark.skipif(
-+    not os.environ.get("RUN_QWEN3_TEST"),
-+    reason="set RUN_QWEN3_TEST=1 to actually download Qwen3 (~1.2GB)",
-+)
-+def test_qwen3_embed_shape():
-+    from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
-+
-+    se = SentenceEmbedder("Qwen/Qwen3-Embedding-0.6B", device="cpu")
-+    emb = se.embed(["hello world", "tabular learning"])
-+    assert emb.shape == (2, 1024)
-+
-+
-+@pytest.mark.skipif(
-+    not os.environ.get("RUN_QWEN3_TEST"),
-+    reason="set RUN_QWEN3_TEST=1 to actually download Qwen3 (~1.2GB)",
-+)
-+def test_qwen3_rpt_construction():
-+    from sap_rpt_oss.constants import ModelSize
-+    from sap_rpt_oss.data.tokenizer import Tokenizer
-+    from sap_rpt_oss.model.torch_model import RPT
-+
-+    tok = Tokenizer(
-+        sentence_embedding_model_name="Qwen/Qwen3-Embedding-0.6B",
-+        sentence_embedder_device="cpu",
-+    )
-+    assert tok.embedding_dim == 1024
-+
-+    m = RPT(
-+        model_size=ModelSize.mini,
-+        sentence_embedding_dim=tok.embedding_dim,
-+    )
-+    # adapter shape should be (hidden=256, 1024)
-+    assert m.embeddings.column_remapping.weight.shape == (256, 1024)
-+    assert m.embeddings.content_remapping.weight.shape == (256, 1024)

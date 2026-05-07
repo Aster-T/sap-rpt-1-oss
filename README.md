@@ -138,6 +138,13 @@ Use `--max-steps 10` for a quick dry-run. `LRU_CACHE_SIZE=10000000` is required
 for Exp 2/3 because Qwen3 embeddings are ~30× more expensive than MiniLM and
 T4 has heavy column-name / categorical-value reuse.
 
+Each invocation **auto-resumes** from the highest-step checkpoint already
+present in the experiment's checkpoint directory (e.g.
+`checkpoints/exp1_minilm_film/exp1_minilm_film-{step}-step.pt`). To start
+fresh — e.g. after changing the config — pass `--no-resume`. Default step
+budgets per experiment: Exp 1 = 200K (post-training), Exp 2/3 = 8M each
+(paper base from-scratch).
+
 ## Known Issues
 No known issues
 

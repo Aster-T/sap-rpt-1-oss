@@ -9,6 +9,9 @@ Usage:
     python -m sap_rpt_oss.run_experiment --exp 1   # MiniLM-L6 + FiLM (post-training)
     python -m sap_rpt_oss.run_experiment --exp 2   # Qwen3 + sum (from scratch)
     python -m sap_rpt_oss.run_experiment --exp 3   # Qwen3 + FiLM (from scratch)
+
+By default each invocation auto-resumes from the highest-step checkpoint found
+in the experiment's checkpoint directory; pass --no-resume to start over.
 """
 
 import argparse
@@ -26,6 +29,7 @@ from sap_rpt_oss.configs import (
 )
 from sap_rpt_oss.pretrain_run import (
     build_model_and_tokenizer,
+    find_latest_checkpoint,
     run_stage,
     seed_everything,
 )
@@ -68,6 +72,12 @@ def main():
         default=None,
         help="Override the training data root path.",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore any local checkpoint and start fresh "
+        "(Exp 1: from official HF ckpt; Exp 2/3: from scratch).",
+    )
     args = parser.parse_args()
 
     name, config_fn = EXPERIMENTS[args.exp]
@@ -84,11 +94,36 @@ def main():
 
     seed_everything(config.random_seed)
 
+    # Stage name is derived from output_root.name in run_stage; mirror it here so
+    # find_latest_checkpoint scopes to this experiment's files only.
+    stage_name = config.output_root_path.name.replace("/", "_")
+    checkpoint_dir = config.resolved_checkpoint_dir
+
     initial_checkpoint: Optional[Path] = None
-    if not config.pretrain_from_scratch:
-        # Exp 1: post-training from the official HF checkpoint.
+    start_step = 0
+    if not args.no_resume:
+        latest_path, latest_step = find_latest_checkpoint(checkpoint_dir, stage_name)
+        if latest_path is not None:
+            print(
+                f"[run_experiment] Resuming from {latest_path} (step={latest_step})"
+            )
+            # Make build_model_and_tokenizer load the local ckpt instead of
+            # initializing from scratch / re-downloading from HF.
+            config = dataclasses.replace(config, pretrain_from_scratch=False)
+            initial_checkpoint = latest_path
+            start_step = latest_step
+
+    if initial_checkpoint is None and not config.pretrain_from_scratch:
+        # Exp 1 cold start: post-training from the official HF checkpoint.
         initial_checkpoint = download_official_ckpt()
         print(f"[run_experiment] Loading official checkpoint from {initial_checkpoint}")
+
+    if start_step >= config.max_steps:
+        print(
+            f"[run_experiment] start_step={start_step} >= max_steps={config.max_steps}; "
+            "nothing to do."
+        )
+        return
 
     model, tokenizer = build_model_and_tokenizer(
         config=config, checkpoint=initial_checkpoint
@@ -101,6 +136,7 @@ def main():
         output_root=config.output_root_path,
         max_num_rows=config.stage1_max_num_rows,
         max_steps=config.max_steps,
+        start_step=start_step,
     )
 
 

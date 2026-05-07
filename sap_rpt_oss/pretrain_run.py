@@ -1,4 +1,5 @@
 import random
+import re
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
@@ -172,6 +173,38 @@ def save_model_weights(
     return checkpoint_path
 
 
+_CHECKPOINT_FILE_PATTERN = re.compile(r"^(?P<stage>.+?)-(?P<step>\d+)-step\.pt$")
+
+
+def find_latest_checkpoint(
+    checkpoint_dir: Path, stage_name: Optional[str] = None
+) -> tuple[Optional[Path], int]:
+    """Return the (path, step) pair of the highest-step `*-N-step.pt` in
+    `checkpoint_dir`, or (None, 0) if no checkpoint exists. If `stage_name` is
+    given, only files whose prefix matches are considered (so stage-1 and
+    stage-2 ckpts written to the same dir don't get mixed up)."""
+    if not checkpoint_dir.exists():
+        return None, 0
+
+    best_path: Optional[Path] = None
+    best_step = -1
+    for entry in checkpoint_dir.iterdir():
+        if not entry.is_file():
+            continue
+        match = _CHECKPOINT_FILE_PATTERN.match(entry.name)
+        if not match:
+            continue
+        if stage_name is not None and match.group("stage") != stage_name:
+            continue
+        step = int(match.group("step"))
+        if step > best_step:
+            best_step = step
+            best_path = entry
+    if best_path is None:
+        return None, 0
+    return best_path, best_step
+
+
 def run_stage(
     config: FinetuneConfig,
     model: RPT,
@@ -182,6 +215,7 @@ def run_stage(
     max_steps: int,
     secondary_data_root: Optional[Path] = None,
     mixing_ratio: float = 0.8,
+    start_step: int = 0,
 ):
     output_root.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -199,17 +233,23 @@ def run_stage(
         mixing_ratio=mixing_ratio,
     )
     optimizer, scheduler = build_optimizer_and_scheduler(model, config)
+    # Fast-forward LR scheduler so warmup/decay state matches resumed step.
+    if scheduler is not None and start_step > 0:
+        for _ in range(start_step):
+            scheduler.step()
     model.to(device)
     model.train()
     optimizer.zero_grad(set_to_none=True)
 
     checkpoint_dir = config.resolved_checkpoint_dir
     stage_name = output_root.name.replace("/", "_")
-    progress = tqdm(total=max_steps, desc=stage_name, unit="step")
+    progress = tqdm(
+        total=max_steps, desc=stage_name, unit="step", initial=start_step
+    )
 
-    global_step = 0
+    global_step = start_step
     pending_batches = 0
-    last_saved_step = 0
+    last_saved_step = start_step
     accumulation_steps = config.resolved_accumulate_grad_batches
     last_loss = 0.0
     last_metric = 0.0

@@ -214,13 +214,40 @@ get_exp2_qwen3_sum_config / get_exp3_qwen3_film_config`。
 ### Task 11 — 统一启动入口 `sap_rpt_oss/run_experiment.py`
 
 **关键内容**：
-- argparse: `--exp {1,2,3}`、`--max-steps N`（dry-run 用）、`--data-root PATH`（覆盖数据路径）。
+- argparse: `--exp {1,2,3}`、`--max-steps N`（dry-run 用）、`--data-root PATH`（覆盖数据路径）、`--no-resume`（关闭自动续训）。
 - 字典 `EXPERIMENTS` 把 1/2/3 映射到对应 config 工厂函数。
 - `download_official_ckpt()` 用 `huggingface_hub.hf_hub_download` 下载官方 ckpt：
   - `repo_id = "SAP/sap-rpt-1-oss"`
   - `filename = "2025-11-04_sap-rpt-one-oss.pt"`（与 `rpt.py` 默认 ckpt 名一致）
 - 仅 Exp 1 使用 `download_official_ckpt`；Exp 2/3 走 `pretrain_from_scratch=True` 分支。
 - README 末尾追加 "Reproducing the ablation experiments" 章节，给出 3 条命令。
+
+### Resume from latest checkpoint（默认开启）
+
+**文件**：`sap_rpt_oss/pretrain_run.py`、`sap_rpt_oss/run_experiment.py`
+
+**关键 diff**：
+- `pretrain_run.py` 新增 `find_latest_checkpoint(checkpoint_dir, stage_name)`：扫描目录里
+  形如 `{stage_name}-{N}-step.pt` 的文件，按 N 取最大；按 stage_name 过滤避免 stage1 / stage2
+  ckpt 串台。
+- `run_stage` 新增 `start_step: int = 0` 参数；构造 LR scheduler 后用循环 `scheduler.step()`
+  把 warmup 状态推进到对应步；`tqdm(total=max_steps, initial=start_step)` 让进度条从断点
+  显示；`global_step / last_saved_step` 都用 `start_step` 初始化。
+- `run_experiment.py::main` 在构造 model 之前先 `find_latest_checkpoint(checkpoint_dir,
+  stage_name)`：找到则覆盖 `pretrain_from_scratch=False`、把本地 ckpt 路径喂给
+  `build_model_and_tokenizer`、把 N 喂给 `run_stage(start_step=N)`；否则保持原行为
+  （Exp 1 走 HF download，Exp 2/3 走 from-scratch init）。
+- `--no-resume` flag 关闭自动续训，强制冷启动。
+- 边界处理：若 `start_step >= max_steps`，直接 print 提示并 return（避免空进度条死循环或
+  抛"no batches yielded"）。
+
+**步数预算**（来自工厂函数）：
+
+| Exp | `max_steps` | `warmup_steps` | 说明 |
+| --- | --- | --- | --- |
+| 1 | 200,000 | 2,000 | post-training，明确缩短 |
+| 2 | 8,000,000 | 1,000 | 论文 base 下限（论文范围 4M–10M） |
+| 3 | 8,000,000 | 1,000 | 同 Exp 2 |
 
 ---
 
