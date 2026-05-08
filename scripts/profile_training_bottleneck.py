@@ -115,9 +115,16 @@ class GPUUtilSampler:
 
 
 def run_profile(args):
+    import dataclasses
+
     config = get_exp1_minilm_film_config()
+    # Profiling cares about kernel timings, not actual weights — force
+    # from-scratch init so we skip HF download / checkpoint load.
+    config = dataclasses.replace(
+        config, pretrain_from_scratch=True, resume_checkpoint_path=None
+    )
     if args.num_workers is not None:
-        config = type(config)(**{**config.__dict__, "num_workers": args.num_workers})
+        config = dataclasses.replace(config, num_workers=args.num_workers)
     seed_everything(config.random_seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
