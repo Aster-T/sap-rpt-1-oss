@@ -79,7 +79,19 @@ class FinetuneConfig:
     streaming_read_batch_size: int | None = None
     shuffle_table: bool = True
     random_seed: int = 42
+    auto_select_target: bool = True
     balance_classification_tasks: bool = True
+
+    # Auto-select streaming caches (auto_select_target=True only).
+    # Both fall back to env vars at dataset construction:
+    #   RPT_REPLAY_BUFFER_SIZE overrides replay_buffer_size,
+    #   RPT_PROBE_CACHE_SIZE  overrides probe_cache_size.
+    # FIFO buffer of (path, target_column) tuples per task type — bounds the
+    # window from which oversample replays are sampled. Lightweight (~250 B/entry).
+    replay_buffer_size: int = 50_000
+    # LRU of probe DataFrames keyed by parquet path. Replays hit this before
+    # falling back to disk re-reads. Heavy (~tens to hundreds of KB per entry).
+    probe_cache_size: int = 1_000_000
 
     # Stage 1.
     stage1_max_num_rows: int = 1000

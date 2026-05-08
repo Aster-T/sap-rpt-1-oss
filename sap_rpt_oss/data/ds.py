@@ -1,3 +1,5 @@
+import os
+from collections import OrderedDict
 from math import ceil
 from pathlib import Path
 from typing import Iterator, Optional, Union
@@ -13,12 +15,24 @@ from sap_rpt_oss.data.rules import (
     classify_target_column,
     exceeds_feature_limit,
     filter_table_frames,
+    get_target_candidates,
 )
 from sap_rpt_oss.data.tokenizer import Tokenizer
 
 
 class TableSkippedError(ValueError):
     pass
+
+
+def _resolve_int_env(env_var: str, fallback: int) -> int:
+    """Return int from env_var if set and parseable, otherwise fallback."""
+    raw = os.getenv(env_var)
+    if raw is None:
+        return fallback
+    try:
+        return int(raw)
+    except ValueError:
+        return fallback
 
 
 def _resolve_table_rules(
@@ -241,12 +255,15 @@ class RPTParquetDataset(IterableDataset):
         min_num_rows: int = 2,
         max_num_rows: Optional[int] = None,
         query_size_range: Optional[tuple[int, int]] = None,
+        auto_select_target: bool = True,
         numeric_nan_ratio_threshold: float = 0.5,
         categorical_unique_ratio_threshold: float = 0.2,
         balance_classification_tasks: bool = False,
         random_seed: int = 42,
         streaming_read_batch_size: Optional[int] = None,
         table_rules: Optional[TableRulesConfig] = None,
+        replay_buffer_size: int = 50_000,
+        probe_cache_size: int = 100_000,
     ):
         self.root_dir = Path(root_dir).expanduser().resolve()
         if not self.root_dir.exists():
@@ -276,6 +293,7 @@ class RPTParquetDataset(IterableDataset):
         self.min_num_rows = self.table_rules.min_num_rows
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
+        self.auto_select_target = auto_select_target
         self.numeric_nan_ratio_threshold = (
             self.table_rules.numeric_nan_ratio_threshold
         )
@@ -294,6 +312,14 @@ class RPTParquetDataset(IterableDataset):
         self._regression_task_count = 0
         self._classification_task_count = 0
         self._balance_rng = np.random.default_rng(self.random_seed + 7919)
+
+        # Cache sizes: env var beats config-passed value beats default.
+        self.replay_buffer_size = _resolve_int_env(
+            "RPT_REPLAY_BUFFER_SIZE", replay_buffer_size
+        )
+        self.probe_cache_size = _resolve_int_env(
+            "RPT_PROBE_CACHE_SIZE", probe_cache_size
+        )
 
     def _should_skip_for_balance(self, is_regression: bool) -> bool:
         if not self.balance_classification_tasks:
@@ -344,6 +370,160 @@ class RPTParquetDataset(IterableDataset):
         except (OSError, pa.ArrowException) as exc:
             print(f"Skipping parquet file {parquet_path} due to read error: {exc}")
             return
+
+    def _read_probe_table(self, parquet_path: Path) -> Optional[pd.DataFrame]:
+        for _, table in self._iter_table_chunks(parquet_path):
+            return table
+        return None
+
+    def _choose_target_column(self, candidates: list[str], seed: int) -> str:
+        rng = np.random.default_rng(seed)
+        return candidates[int(rng.integers(0, len(candidates)))]
+
+    def _stream_auto_target_specs(
+        self, parquet_files: list[Path]
+    ) -> Iterator[tuple[dict[str, object], pd.DataFrame]]:
+        """Streaming, paper-equivalent auto-select.
+
+        Per file:
+          1. Probe (read first chunk).
+          2. Randomly pick one column from regression candidates (if any) and
+             one from classification candidates (if any).
+          3. Yield each fresh spec together with its probe table.
+          4. If `balance_classification_tasks` is on, after each fresh emission
+             pull replays from the minority side's history buffer until the
+             two counters are equal (paper's effect: oversample minority class).
+
+        Memory layout: sizes come from `replay_buffer_size` / `probe_cache_size`
+        on the dataset (env vars `RPT_REPLAY_BUFFER_SIZE` / `RPT_PROBE_CACHE_SIZE`
+        override the config-passed values). Defaults assume ~256 GB hosts.
+          - history_reg / history_cls: bounded FIFO of (path, target_column)
+            tuples — lightweight (~250 B/entry).
+          - probe_cache: LRU of recent probe DataFrames; replays hit this
+            cache before falling back to disk re-reads.
+        """
+        replay_buffer_size = self.replay_buffer_size
+        probe_cache_size = self.probe_cache_size
+
+        order_rng = np.random.default_rng(self.random_seed)
+        shuffled_indices = np.arange(len(parquet_files))
+        order_rng.shuffle(shuffled_indices)
+
+        per_file_rng = np.random.default_rng(self.random_seed + 2)
+        replay_rng = np.random.default_rng(self.random_seed + 3)
+
+        history_reg: list[tuple[Path, str]] = []
+        history_cls: list[tuple[Path, str]] = []
+        probe_cache: "OrderedDict[Path, pd.DataFrame]" = OrderedDict()
+
+        def cache_put(path: Path, table: pd.DataFrame) -> None:
+            if path in probe_cache:
+                probe_cache.move_to_end(path)
+                return
+            probe_cache[path] = table
+            while len(probe_cache) > probe_cache_size:
+                probe_cache.popitem(last=False)
+
+        def cache_get_or_read(path: Path) -> Optional[pd.DataFrame]:
+            cached = probe_cache.get(path)
+            if cached is not None:
+                probe_cache.move_to_end(path)
+                return cached
+            table = self._read_probe_table(path)
+            if table is not None:
+                cache_put(path, table)
+            return table
+
+        def push_history(buf: list, path: Path, target: str) -> None:
+            buf.append((path, target))
+            if len(buf) > replay_buffer_size:
+                buf.pop(0)
+
+        def replay_one(buf: list) -> Optional[tuple[Path, str, pd.DataFrame]]:
+            if not buf:
+                return None
+            idx = int(replay_rng.integers(0, len(buf)))
+            path, target = buf[idx]
+            table = cache_get_or_read(path)
+            if table is None:
+                return None
+            return path, target, table
+
+        for shuffled_idx in shuffled_indices:
+            file_idx = int(shuffled_idx)
+            parquet_path = parquet_files[file_idx]
+            table = cache_get_or_read(parquet_path)
+            if table is None:
+                continue
+            if exceeds_feature_limit(table, self.max_num_features):
+                continue
+
+            regression_candidates, classification_candidates = (
+                get_target_candidates(
+                    table,
+                    numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
+                    categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
+                )
+            )
+
+            specs_for_file: list[tuple[str, bool]] = []
+            if regression_candidates:
+                target = self._choose_target_column(
+                    regression_candidates, self.random_seed + file_idx
+                )
+                specs_for_file.append((target, True))
+                push_history(history_reg, parquet_path, target)
+            if classification_candidates:
+                target = self._choose_target_column(
+                    classification_candidates,
+                    self.random_seed + len(parquet_files) + file_idx,
+                )
+                specs_for_file.append((target, False))
+                push_history(history_cls, parquet_path, target)
+
+            per_file_rng.shuffle(specs_for_file)
+
+            for target_column, is_regression in specs_for_file:
+                spec = {
+                    "source_path": parquet_path,
+                    "target_column": target_column,
+                    "is_regression": is_regression,
+                }
+                if is_regression:
+                    self._regression_task_count += 1
+                else:
+                    self._classification_task_count += 1
+                yield spec, table
+
+                if not self.balance_classification_tasks:
+                    continue
+
+                # Drain replays from the minority side until counters even out
+                # (or that side has nothing yet to replay from).
+                while (
+                    self._regression_task_count != self._classification_task_count
+                ):
+                    minority_is_reg = (
+                        self._regression_task_count
+                        < self._classification_task_count
+                    )
+                    minority_history = (
+                        history_reg if minority_is_reg else history_cls
+                    )
+                    replayed = replay_one(minority_history)
+                    if replayed is None:
+                        break
+                    rpath, rtarget, rtable = replayed
+                    rspec = {
+                        "source_path": rpath,
+                        "target_column": rtarget,
+                        "is_regression": minority_is_reg,
+                    }
+                    if minority_is_reg:
+                        self._regression_task_count += 1
+                    else:
+                        self._classification_task_count += 1
+                    yield rspec, rtable
 
     def _iter_batches_from_table(
         self,
@@ -405,6 +585,25 @@ class RPTParquetDataset(IterableDataset):
         self._classification_task_count = 0
 
         yielded_any = False
+        if self.auto_select_target:
+            for spec_idx, (spec, probe_table) in enumerate(
+                self._stream_auto_target_specs(parquet_files)
+            ):
+                for batch in self._iter_batches_from_table(
+                    parquet_path=Path(spec["source_path"]),
+                    table=probe_table,
+                    target_column=str(spec["target_column"]),
+                    is_regression=bool(spec["is_regression"]),
+                    seed=self.random_seed + spec_idx * 10_000,
+                ):
+                    yielded_any = True
+                    yield batch
+            if not yielded_any and worker_info is None:
+                raise ValueError(
+                    f"no eligible parquet tables found under {self.root_dir}"
+                )
+            return
+
         for file_idx, parquet_path in enumerate(parquet_files):
             for chunk_idx, table in self._iter_table_chunks(parquet_path):
                 if exceeds_feature_limit(table, self.max_num_features):

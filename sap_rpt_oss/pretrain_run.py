@@ -101,10 +101,13 @@ def _build_single_dataset(
         shuffle_table=config.shuffle_table,
         max_num_rows=max_num_rows,
         query_size_range=config.query_size_range,
+        auto_select_target=config.auto_select_target,
         balance_classification_tasks=config.balance_classification_tasks,
         random_seed=config.random_seed,
         streaming_read_batch_size=config.streaming_read_batch_size,
         table_rules=config.table_rules,
+        replay_buffer_size=config.replay_buffer_size,
+        probe_cache_size=config.probe_cache_size,
     )
 
 
