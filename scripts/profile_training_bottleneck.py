@@ -14,6 +14,7 @@ during compute, and gives actionable recommendations.
 import argparse
 import statistics
 import subprocess
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -21,11 +22,15 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Optional
 
-import torch
-from torch.optim import AdamW
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from sap_rpt_oss.configs import get_exp1_minilm_film_config
-from sap_rpt_oss.pretrain_run import (
+import torch  # noqa: E402  (sys.path setup must run first)
+from torch.optim import AdamW  # noqa: E402
+
+from sap_rpt_oss.configs import get_exp1_minilm_film_config  # noqa: E402
+from sap_rpt_oss.pretrain_run import (  # noqa: E402
     build_dataloader,
     build_model_and_tokenizer,
     infer_autocast_dtype,
