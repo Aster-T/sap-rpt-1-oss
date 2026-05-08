@@ -10,10 +10,9 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from sap_rpt_oss.configs import TableRulesConfig
 from sap_rpt_oss.data.rules import (
+    classify_target_column,
     exceeds_feature_limit,
     filter_table_frames,
-    get_target_candidates,
-    is_eligible_target_column,
 )
 from sap_rpt_oss.data.tokenizer import Tokenizer
 
@@ -242,13 +241,10 @@ class RPTParquetDataset(IterableDataset):
         min_num_rows: int = 2,
         max_num_rows: Optional[int] = None,
         query_size_range: Optional[tuple[int, int]] = None,
-        auto_select_target: bool = False,
-        skip_ineligible_target: bool = False,
         numeric_nan_ratio_threshold: float = 0.5,
         categorical_unique_ratio_threshold: float = 0.2,
         balance_classification_tasks: bool = False,
         random_seed: int = 42,
-        regression_keyword: str = "regression",
         streaming_read_batch_size: Optional[int] = None,
         table_rules: Optional[TableRulesConfig] = None,
     ):
@@ -280,8 +276,6 @@ class RPTParquetDataset(IterableDataset):
         self.min_num_rows = self.table_rules.min_num_rows
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
-        self.auto_select_target = auto_select_target
-        self.skip_ineligible_target = skip_ineligible_target
         self.numeric_nan_ratio_threshold = (
             self.table_rules.numeric_nan_ratio_threshold
         )
@@ -290,7 +284,6 @@ class RPTParquetDataset(IterableDataset):
         )
         self.balance_classification_tasks = balance_classification_tasks
         self.random_seed = random_seed
-        self.regression_keyword = regression_keyword.lower()
         self.streaming_read_batch_size = self._resolve_streaming_read_batch_size(
             streaming_read_batch_size
         )
@@ -301,9 +294,6 @@ class RPTParquetDataset(IterableDataset):
         self._regression_task_count = 0
         self._classification_task_count = 0
         self._balance_rng = np.random.default_rng(self.random_seed + 7919)
-
-    def _infer_is_regression(self, parquet_path: Path) -> bool:
-        return self.regression_keyword in parquet_path.as_posix().lower()
 
     def _should_skip_for_balance(self, is_regression: bool) -> bool:
         if not self.balance_classification_tasks:
@@ -354,74 +344,6 @@ class RPTParquetDataset(IterableDataset):
         except (OSError, pa.ArrowException) as exc:
             print(f"Skipping parquet file {parquet_path} due to read error: {exc}")
             return
-
-    def _read_probe_table(self, parquet_path: Path) -> Optional[pd.DataFrame]:
-        for _, table in self._iter_table_chunks(parquet_path):
-            return table
-        return None
-
-    def _choose_target_column(self, candidates: list[str], seed: int) -> str:
-        rng = np.random.default_rng(seed)
-        return candidates[int(rng.integers(0, len(candidates)))]
-
-    def _stream_auto_target_specs(
-        self, parquet_files: list[Path]
-    ) -> Iterator[tuple[dict[str, object], pd.DataFrame]]:
-        order_rng = np.random.default_rng(self.random_seed)
-        shuffled_indices = np.arange(len(parquet_files))
-        order_rng.shuffle(shuffled_indices)
-
-        per_file_rng = np.random.default_rng(self.random_seed + 1)
-        num_files = len(parquet_files)
-
-        for file_idx in shuffled_indices:
-            parquet_path = parquet_files[int(file_idx)]
-            table = self._read_probe_table(parquet_path)
-            if table is None:
-                continue
-            if exceeds_feature_limit(table, self.max_num_features):
-                continue
-
-            regression_candidates, classification_candidates = (
-                get_target_candidates(
-                    table,
-                    numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
-                    categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
-                )
-            )
-
-            specs_for_file: list[dict[str, object]] = []
-            if regression_candidates:
-                specs_for_file.append(
-                    {
-                        "source_path": parquet_path,
-                        "target_column": self._choose_target_column(
-                            regression_candidates, self.random_seed + int(file_idx)
-                        ),
-                        "is_regression": True,
-                    }
-                )
-            if classification_candidates:
-                specs_for_file.append(
-                    {
-                        "source_path": parquet_path,
-                        "target_column": self._choose_target_column(
-                            classification_candidates,
-                            self.random_seed + num_files + int(file_idx),
-                        ),
-                        "is_regression": False,
-                    }
-                )
-            per_file_rng.shuffle(specs_for_file)
-            for spec in specs_for_file:
-                is_regression = bool(spec["is_regression"])
-                if self._should_skip_for_balance(is_regression):
-                    continue
-                if is_regression:
-                    self._regression_task_count += 1
-                else:
-                    self._classification_task_count += 1
-                yield spec, table
 
     def _iter_batches_from_table(
         self,
@@ -483,50 +405,43 @@ class RPTParquetDataset(IterableDataset):
         self._classification_task_count = 0
 
         yielded_any = False
-        if self.auto_select_target:
-            for spec_idx, (spec, probe_table) in enumerate(
-                self._stream_auto_target_specs(parquet_files)
-            ):
+        for file_idx, parquet_path in enumerate(parquet_files):
+            for chunk_idx, table in self._iter_table_chunks(parquet_path):
+                if exceeds_feature_limit(table, self.max_num_features):
+                    continue
+                target_column = (
+                    self.target_column
+                    if self.target_column is not None
+                    else str(table.columns[-1])
+                )
+                task_type = classify_target_column(
+                    table[target_column],
+                    num_rows=len(table),
+                    numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
+                    categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
+                )
+                if task_type == "regression":
+                    is_regression = True
+                elif task_type == "classification":
+                    is_regression = False
+                else:
+                    # target column is to be discarded -> skip whole table
+                    continue
+                if self._should_skip_for_balance(is_regression):
+                    continue
+                if is_regression:
+                    self._regression_task_count += 1
+                else:
+                    self._classification_task_count += 1
                 for batch in self._iter_batches_from_table(
-                    parquet_path=Path(spec["source_path"]),
-                    table=probe_table,
-                    target_column=str(spec["target_column"]),
-                    is_regression=bool(spec["is_regression"]),
-                    seed=self.random_seed + spec_idx * 10_000,
+                    parquet_path=parquet_path,
+                    table=table,
+                    target_column=target_column,
+                    is_regression=is_regression,
+                    seed=self.random_seed + file_idx * 10_000 + chunk_idx,
                 ):
                     yielded_any = True
                     yield batch
-        else:
-            for file_idx, parquet_path in enumerate(parquet_files):
-                for chunk_idx, table in self._iter_table_chunks(parquet_path):
-                    if exceeds_feature_limit(table, self.max_num_features):
-                        continue
-                    target_column = (
-                        self.target_column
-                        if self.target_column is not None
-                        else str(table.columns[-1])
-                    )
-                    is_regression = self._infer_is_regression(parquet_path)
-                    if (
-                        self.skip_ineligible_target
-                        and not is_eligible_target_column(
-                            table,
-                            target_column,
-                            is_regression,
-                            numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
-                            categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
-                        )
-                    ):
-                        continue
-                    for batch in self._iter_batches_from_table(
-                        parquet_path=parquet_path,
-                        table=table,
-                        target_column=target_column,
-                        is_regression=is_regression,
-                        seed=self.random_seed + file_idx * 10_000 + chunk_idx,
-                    ):
-                        yielded_any = True
-                        yield batch
 
         if not yielded_any and worker_info is None:
             raise ValueError(f"no eligible parquet tables found under {self.root_dir}")

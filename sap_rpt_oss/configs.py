@@ -78,10 +78,7 @@ class FinetuneConfig:
     predict_chunk_size: int | None = None
     streaming_read_batch_size: int | None = None
     shuffle_table: bool = True
-    regression_keyword: str = "regression"
     random_seed: int = 42
-    auto_select_target: bool = True
-    skip_ineligible_target: bool = True
     balance_classification_tasks: bool = True
 
     # Stage 1.
@@ -171,7 +168,7 @@ def get_paper_aligned_pretrain_config() -> FinetuneConfig:
         balance_classification_tasks=True,
         table_rules=TableRulesConfig(
             min_num_rows=150,
-            max_num_columns=500,
+            max_num_columns=100,
             numeric_nan_ratio_threshold=0.5,
             categorical_unique_ratio_threshold=0.2,
             drop_constant_columns=True,

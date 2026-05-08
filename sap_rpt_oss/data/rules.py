@@ -1,5 +1,5 @@
 import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
@@ -75,22 +75,31 @@ def get_target_candidates(
     return regression_candidates, classification_candidates
 
 
-def is_eligible_target_column(
-    table: pd.DataFrame,
-    target_column: str,
-    is_regression: bool,
+def classify_target_column(
+    column: pd.Series,
+    num_rows: int,
     *,
     numeric_nan_ratio_threshold: float,
     categorical_unique_ratio_threshold: float,
-) -> bool:
-    regression_candidates, classification_candidates = get_target_candidates(
-        table,
-        numeric_nan_ratio_threshold=numeric_nan_ratio_threshold,
-        categorical_unique_ratio_threshold=categorical_unique_ratio_threshold,
-    )
-    if is_regression:
-        return target_column in regression_candidates
-    return target_column in classification_candidates
+) -> Optional[Literal["regression", "classification"]]:
+    """O(1)-cost variant of `get_target_candidates` that inspects a single column.
+
+    Returns "regression", "classification", or None (column is to be discarded).
+    Use this when only one specific column's task type is needed; use
+    `get_target_candidates` when you need to enumerate every candidate.
+    """
+    if column.notna().sum() == 0:
+        return None
+    if _is_date_like_column(column):
+        return None
+    if _is_numeric_column(column):
+        if column.isna().mean() <= numeric_nan_ratio_threshold:
+            return "regression"
+        return None
+    unique_ratio = column.nunique(dropna=True) / max(num_rows, 1)
+    if unique_ratio <= categorical_unique_ratio_threshold:
+        return "classification"
+    return None
 
 
 def _first_non_null_value(series: pd.Series):

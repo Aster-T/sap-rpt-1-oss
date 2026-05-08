@@ -12,6 +12,7 @@ during compute, and gives actionable recommendations.
 """
 
 import argparse
+import queue
 import statistics
 import subprocess
 import sys
@@ -37,6 +38,38 @@ from sap_rpt_oss.pretrain_run import (  # noqa: E402
     move_to_device,
     seed_everything,
 )
+
+
+def thread_prefetch(source, max_prefetch: int = 2):
+    """Pull from `source` in a background thread, yield from the main thread.
+
+    Useful when DataLoader's multiprocessing path is blocked (e.g.,
+    sentence-transformers / CUDA fork issues). Effective only to the
+    extent that `source`'s work releases the GIL — PyArrow reads and
+    CUDA kernels do; pure-Python loops don't.
+    """
+    sentinel = object()
+    q: queue.Queue = queue.Queue(maxsize=max(1, max_prefetch))
+    state = {"exception": None}
+
+    def worker():
+        try:
+            for item in source:
+                q.put(item)
+        except BaseException as exc:
+            state["exception"] = exc
+        finally:
+            q.put(sentinel)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        item = q.get()
+        if item is sentinel:
+            if state["exception"] is not None:
+                raise state["exception"]
+            return
+        yield item
 
 
 @contextmanager
@@ -158,7 +191,12 @@ def run_profile(args):
         data_root=config.data_root_path,
         max_num_rows=config.stage1_max_num_rows,
     )
-    iter_loader = iter(dataloader)
+    if args.thread_prefetch > 0:
+        print(f"[profile] wrapping dataloader with thread prefetch "
+              f"(max_prefetch={args.thread_prefetch})")
+        iter_loader = thread_prefetch(dataloader, max_prefetch=args.thread_prefetch)
+    else:
+        iter_loader = iter(dataloader)
 
     # ---- warmup ----
     print(f"[profile] warmup for {args.warmup} iterations...")
@@ -368,6 +406,14 @@ def main():
         action="store_true",
         help="Skip dataloader; reuse one batch repeatedly. "
         "Measures pure GPU compute ceiling.",
+    )
+    parser.add_argument(
+        "--thread-prefetch",
+        type=int,
+        default=0,
+        help="If > 0, wrap the dataloader with a single-thread background "
+        "prefetcher of this depth. Workaround for when DataLoader "
+        "multiprocessing breaks (e.g., sentence-transformers fork issues).",
     )
     args = parser.parse_args()
 

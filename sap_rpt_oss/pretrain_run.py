@@ -101,11 +101,8 @@ def _build_single_dataset(
         shuffle_table=config.shuffle_table,
         max_num_rows=max_num_rows,
         query_size_range=config.query_size_range,
-        auto_select_target=config.auto_select_target,
-        skip_ineligible_target=config.skip_ineligible_target,
         balance_classification_tasks=config.balance_classification_tasks,
         random_seed=config.random_seed,
-        regression_keyword=config.regression_keyword,
         streaming_read_batch_size=config.streaming_read_batch_size,
         table_rules=config.table_rules,
     )
