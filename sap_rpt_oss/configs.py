@@ -192,6 +192,12 @@ def get_exp1_minilm_film_config() -> FinetuneConfig:
         learning_rate=1e-4,
         output_root_path=Path("outputs/exp1_minilm_film"),
         checkpoint_root_path=Path("checkpoints/exp1_minilm_film"),
+        stage1_max_num_rows=1000,
+        query_size_range=(50, 900),
+        table_rules=TableRulesConfig(
+            min_num_rows=150,
+            max_num_columns=50,
+        ),
     )
 
 
