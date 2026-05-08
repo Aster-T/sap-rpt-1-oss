@@ -64,12 +64,13 @@ class Tokenizer:
             clip_quantile = 0.005 if is_valid else 0.02
         self.is_valid = bool(is_valid) if is_valid is not None else False
         if not 0.0 <= clip_quantile < 0.5:
-            raise ValueError(
-                f"clip_quantile must be in [0, 0.5); got {clip_quantile}"
-            )
+            raise ValueError(f"clip_quantile must be in [0, 0.5); got {clip_quantile}")
         self.clip_quantile = float(clip_quantile)
 
-        if sentence_embedding_model_name not in embedding_model_to_dimension_and_pooling:
+        if (
+            sentence_embedding_model_name
+            not in embedding_model_to_dimension_and_pooling
+        ):
             raise ValueError(
                 f"Unknown sentence embedding model: {sentence_embedding_model_name}. "
                 f"Known models: {list(embedding_model_to_dimension_and_pooling)}"
@@ -83,7 +84,7 @@ class Tokenizer:
             self.sentence_embedding_model_name,
             device=sentence_embedder_device,
         )
-        self.cache = LRU_Cache(max_size=int(os.getenv("LRU_CACHE_SIZE", 1_000_000)))
+        self.cache = LRU_Cache(max_size=int(os.getenv("LRU_CACHE_SIZE", 10_000_000)))
 
     def texts_to_tensor(self, texts: Collection[str]) -> torch.Tensor:
         if len(texts) == 0:
@@ -105,7 +106,9 @@ class Tokenizer:
         return torch.tensor(results, dtype=torch.float16)
 
     @staticmethod
-    def stable_unique_with_first_indices(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    def stable_unique_with_first_indices(
+        values: pd.Series,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Returns unique values in first-occurrence order, together with their positional indices.
 
@@ -132,8 +135,12 @@ class Tokenizer:
         train_data = y_train.astype(float).values
         test_data = y_test.astype(float).values
 
-        train_data = np.where(np.isfinite(train_data), np.clip(train_data, -1e100, 1e100), np.nan)
-        test_data = np.where(np.isfinite(test_data), np.clip(test_data, -1e100, 1e100), np.nan)
+        train_data = np.where(
+            np.isfinite(train_data), np.clip(train_data, -1e100, 1e100), np.nan
+        )
+        test_data = np.where(
+            np.isfinite(test_data), np.clip(test_data, -1e100, 1e100), np.nan
+        )
 
         finite_train = train_data[np.isfinite(train_data)]
         if finite_train.size == 0:
@@ -379,7 +386,9 @@ class Tokenizer:
             # or maybe if one class is 0 (int) and one is "0" (string) -
             # well, let's hope that doesn't happen, but who knows.
             # In that case, add a prefix to classes and embed again
-            unique_classes, unique_indices = self.stable_unique_with_first_indices(texts)
+            unique_classes, unique_indices = self.stable_unique_with_first_indices(
+                texts
+            )
             should_be_unique_embeddings = data["text_embeddings"][:, -1].numpy()[
                 unique_indices
             ]

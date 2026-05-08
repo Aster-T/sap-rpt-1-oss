@@ -1,6 +1,8 @@
+import logging
 import random
 import re
 from contextlib import nullcontext
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +17,41 @@ from sap_rpt_oss.configs import FINETUNE_CONFIG, FinetuneConfig
 from sap_rpt_oss.data.ds import MixedRPTDataset, RPTParquetDataset
 from sap_rpt_oss.data.tokenizer import Tokenizer
 from sap_rpt_oss.model.torch_model import RPT
+
+
+class _TqdmLoggingHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            tqdm.write(self.format(record))
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
+def _setup_train_logger(log_dir: Path, stage_name: str) -> logging.Logger:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"{stage_name}_{timestamp}.log"
+
+    logger = logging.getLogger(f"sap_rpt_oss.train.{stage_name}.{timestamp}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.handlers.clear()
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = _TqdmLoggingHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    logger.info(f"Writing training log to {log_path}")
+    return logger
 
 
 def seed_everything(seed: int):
@@ -243,6 +280,12 @@ def run_stage(
 
     checkpoint_dir = config.resolved_checkpoint_dir
     stage_name = output_root.name.replace("/", "_")
+    logger = _setup_train_logger(output_root, stage_name)
+    logger.info(
+        f"stage={stage_name} start_step={start_step} max_steps={max_steps} "
+        f"accumulate_grad_batches={config.resolved_accumulate_grad_batches} "
+        f"log_every_n_steps={config.log_every_n_steps}"
+    )
     progress = tqdm(
         total=max_steps, desc=stage_name, unit="step", initial=start_step
     )
@@ -253,6 +296,8 @@ def run_stage(
     accumulation_steps = config.resolved_accumulate_grad_batches
     last_loss = 0.0
     last_metric = 0.0
+    reg_batch_count = 0
+    cls_batch_count = 0
 
     def finish_optimizer_step():
         nonlocal global_step
@@ -280,9 +325,23 @@ def run_stage(
             lr=f"{optimizer.param_groups[0]['lr']:.2e}",
         )
 
+        if global_step % config.log_every_n_steps == 0:
+            total_batches = reg_batch_count + cls_batch_count
+            cls_ratio = (
+                cls_batch_count / total_batches if total_batches > 0 else 0.0
+            )
+            logger.info(
+                f"step={global_step} loss={last_loss:.4f} "
+                f"metric={last_metric:.4f} "
+                f"lr={optimizer.param_groups[0]['lr']:.2e} "
+                f"reg_batches={reg_batch_count} cls_batches={cls_batch_count} "
+                f"cls_ratio={cls_ratio:.3f}"
+            )
+
         if global_step % config.checkpoint_save_every_n_train_steps == 0:
             save_model_weights(model, checkpoint_dir, stage_name, global_step)
             last_saved_step = global_step
+            logger.info(f"checkpoint saved at step={global_step}")
 
     while global_step < max_steps:
         yielded_batch = False
@@ -296,6 +355,10 @@ def run_stage(
                 is_regression = bool(is_regression.item())
             else:
                 is_regression = bool(is_regression)
+            if is_regression:
+                reg_batch_count += 1
+            else:
+                cls_batch_count += 1
             batch = move_to_device(batch, device)
             autocast_context = (
                 torch.autocast(device_type="cuda", dtype=autocast_dtype)
@@ -331,7 +394,15 @@ def run_stage(
 
     if global_step != last_saved_step:
         save_model_weights(model, checkpoint_dir, stage_name, global_step)
+        logger.info(f"checkpoint saved at step={global_step} (final)")
 
+    total_batches = reg_batch_count + cls_batch_count
+    cls_ratio = cls_batch_count / total_batches if total_batches > 0 else 0.0
+    logger.info(
+        f"stage={stage_name} finished: total_steps={global_step} "
+        f"reg_batches={reg_batch_count} cls_batches={cls_batch_count} "
+        f"cls_ratio={cls_ratio:.3f}"
+    )
     progress.close()
 
 

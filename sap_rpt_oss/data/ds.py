@@ -298,8 +298,27 @@ class RPTParquetDataset(IterableDataset):
         if not self.parquet_files:
             raise FileNotFoundError(f"no parquet files found under {self.root_dir}")
 
+        self._regression_task_count = 0
+        self._classification_task_count = 0
+        self._balance_rng = np.random.default_rng(self.random_seed + 7919)
+
     def _infer_is_regression(self, parquet_path: Path) -> bool:
         return self.regression_keyword in parquet_path.as_posix().lower()
+
+    def _should_skip_for_balance(self, is_regression: bool) -> bool:
+        if not self.balance_classification_tasks:
+            return False
+        total = self._regression_task_count + self._classification_task_count
+        if total < 50:
+            return False
+        if is_regression:
+            share = self._regression_task_count / total
+        else:
+            share = self._classification_task_count / total
+        if share <= 0.5:
+            return False
+        skip_prob = 2.0 * (share - 0.5)
+        return bool(self._balance_rng.random() < skip_prob)
 
     def _resolve_streaming_read_batch_size(
         self, streaming_read_batch_size: Optional[int]
@@ -345,13 +364,18 @@ class RPTParquetDataset(IterableDataset):
         rng = np.random.default_rng(seed)
         return candidates[int(rng.integers(0, len(candidates)))]
 
-    def _build_auto_target_specs(
+    def _stream_auto_target_specs(
         self, parquet_files: list[Path]
-    ) -> list[dict[str, object]]:
-        regression_specs = []
-        classification_specs = []
+    ) -> Iterator[tuple[dict[str, object], pd.DataFrame]]:
+        order_rng = np.random.default_rng(self.random_seed)
+        shuffled_indices = np.arange(len(parquet_files))
+        order_rng.shuffle(shuffled_indices)
 
-        for file_idx, parquet_path in enumerate(parquet_files):
+        per_file_rng = np.random.default_rng(self.random_seed + 1)
+        num_files = len(parquet_files)
+
+        for file_idx in shuffled_indices:
+            parquet_path = parquet_files[int(file_idx)]
             table = self._read_probe_table(parquet_path)
             if table is None:
                 continue
@@ -365,45 +389,39 @@ class RPTParquetDataset(IterableDataset):
                     categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
                 )
             )
+
+            specs_for_file: list[dict[str, object]] = []
             if regression_candidates:
-                regression_specs.append(
+                specs_for_file.append(
                     {
                         "source_path": parquet_path,
                         "target_column": self._choose_target_column(
-                            regression_candidates, self.random_seed + file_idx
+                            regression_candidates, self.random_seed + int(file_idx)
                         ),
                         "is_regression": True,
                     }
                 )
             if classification_candidates:
-                classification_specs.append(
+                specs_for_file.append(
                     {
                         "source_path": parquet_path,
                         "target_column": self._choose_target_column(
                             classification_candidates,
-                            self.random_seed + len(parquet_files) + file_idx,
+                            self.random_seed + num_files + int(file_idx),
                         ),
                         "is_regression": False,
                     }
                 )
-
-        if (
-            self.balance_classification_tasks
-            and regression_specs
-            and classification_specs
-            and len(classification_specs) < len(regression_specs)
-        ):
-            num_extra_specs = len(regression_specs) - len(classification_specs)
-            extra_indices = np.random.default_rng(self.random_seed).choice(
-                len(classification_specs), size=num_extra_specs, replace=True
-            )
-            classification_specs.extend(
-                [classification_specs[int(index)].copy() for index in extra_indices]
-            )
-
-        all_specs = regression_specs + classification_specs
-        np.random.default_rng(self.random_seed).shuffle(all_specs)
-        return all_specs
+            per_file_rng.shuffle(specs_for_file)
+            for spec in specs_for_file:
+                is_regression = bool(spec["is_regression"])
+                if self._should_skip_for_balance(is_regression):
+                    continue
+                if is_regression:
+                    self._regression_task_count += 1
+                else:
+                    self._classification_task_count += 1
+                yield spec, table
 
     def _iter_batches_from_table(
         self,
@@ -453,32 +471,6 @@ class RPTParquetDataset(IterableDataset):
         finally:
             del dataset
 
-    def _iter_batches_for_file(
-        self,
-        parquet_path: Path,
-        target_column: str,
-        is_regression: bool,
-        seed_offset: int,
-    ) -> Iterator[dict[str, object]]:
-        for chunk_idx, table in self._iter_table_chunks(parquet_path):
-            if exceeds_feature_limit(table, self.max_num_features):
-                continue
-            if self.skip_ineligible_target and not is_eligible_target_column(
-                table,
-                target_column,
-                is_regression,
-                numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
-                categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
-            ):
-                continue
-            yield from self._iter_batches_from_table(
-                parquet_path=parquet_path,
-                table=table,
-                target_column=target_column,
-                is_regression=is_regression,
-                seed=self.random_seed + seed_offset + chunk_idx,
-            )
-
     def __iter__(self) -> Iterator[dict[str, object]]:
         worker_info = get_worker_info()
         parquet_files = self.parquet_files
@@ -487,16 +479,20 @@ class RPTParquetDataset(IterableDataset):
             if not parquet_files:
                 return
 
+        self._regression_task_count = 0
+        self._classification_task_count = 0
+
         yielded_any = False
         if self.auto_select_target:
-            for spec_idx, spec in enumerate(
-                self._build_auto_target_specs(parquet_files)
+            for spec_idx, (spec, probe_table) in enumerate(
+                self._stream_auto_target_specs(parquet_files)
             ):
-                for batch in self._iter_batches_for_file(
+                for batch in self._iter_batches_from_table(
                     parquet_path=Path(spec["source_path"]),
+                    table=probe_table,
                     target_column=str(spec["target_column"]),
                     is_regression=bool(spec["is_regression"]),
-                    seed_offset=spec_idx * 10_000,
+                    seed=self.random_seed + spec_idx * 10_000,
                 ):
                     yielded_any = True
                     yield batch
