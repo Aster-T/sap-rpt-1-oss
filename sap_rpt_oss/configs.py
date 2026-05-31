@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 from sap_rpt_oss.constants import (
+    QUANTILE_DIMENSION_DEFAULT,
     ModelSize,
     embedding_model_to_dimension_and_pooling,
 )
@@ -18,14 +19,24 @@ class TableRulesConfig:
 
     # 去掉唯一值列
     drop_constant_columns: bool = True
-    # 最大特征数（与推理侧 MAX_NUM_COLUMNS 对齐，论文 Section 4.1 末段）
-    max_num_columns: int = 500
+    # 宽表下采样目标宽度：列数超过它的表随机抽到这么多列（保留目标列），而不是整张
+    # 跳过——与推理侧 rpt.py 的 MAX_NUM_COLUMNS 下采样行为一致。t4 实测：中位 9 列、
+    # p95≈42、p99≈176、max≈512，128 覆盖约 98.5% 的表全宽。
+    max_num_columns: int = 128
     # 最小行数
     min_num_rows: int = 150
-    # 缺失值超过这个比例的数值列跳过
+    # 缺失值超过这个比例的数值列跳过（不作任何目标）
     numeric_nan_ratio_threshold: float = 0.5
-    # 非数值列中唯一值超过这个比例的列跳过
+    # 非数值列中 唯一值/行数 超过这个比例的列不作分类目标
     categorical_unique_ratio_threshold: float = 0.2
+    # 数值列按基数路由：唯一值 <= 此值 → 当分类目标（0/1、评分、整数类别码），> 此值
+    # → 当回归目标（连续值）。修复"数值列一律当回归"的误判，也排除退化的 2 值回归。
+    numeric_as_classification_max_unique: int = 20
+    # 分类目标的绝对类数上限（= QUANTILE_DIMENSION-2，分类头定宽）。超过它的列不作
+    # 分类目标，避免大量类塌进单个 overflow 桶的垃圾任务。
+    classification_max_classes: int = QUANTILE_DIMENSION_DEFAULT - 2
+    # 病态超宽表的硬跳过上限（特征数）；None = 从不因宽而跳，一律下采样。
+    max_hard_columns: int | None = None
 
     @property
     def max_num_features(self) -> int:
@@ -86,7 +97,7 @@ class FinetuneConfig:
     table_rules: TableRulesConfig = field(
         default_factory=lambda: TableRulesConfig(
             min_num_rows=150,
-            max_num_columns=500,
+            max_num_columns=128,
         )
     )
 
@@ -200,7 +211,7 @@ def get_paper_aligned_pretrain_config() -> FinetuneConfig:
         balance_classification_tasks=True,
         table_rules=TableRulesConfig(
             min_num_rows=150,
-            max_num_columns=100,
+            max_num_columns=128,
             numeric_nan_ratio_threshold=0.5,
             categorical_unique_ratio_threshold=0.2,
             drop_constant_columns=True,
@@ -225,7 +236,7 @@ def get_exp1_minilm_film_config() -> FinetuneConfig:
         query_size_range=(50, 900),
         table_rules=TableRulesConfig(
             min_num_rows=150,
-            max_num_columns=50,
+            max_num_columns=128,
         ),
     )
 

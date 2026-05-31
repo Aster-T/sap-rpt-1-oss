@@ -91,6 +91,7 @@ class RPTTableDataset(Dataset):
         self.max_num_columns = self.table_rules.max_num_columns
         self.max_num_features = self.table_rules.max_num_features
         self.min_num_rows = self.table_rules.min_num_rows
+        self.max_hard_columns = self.table_rules.max_hard_columns
         self.max_num_rows = max_num_rows
         self.query_size_range = query_size_range
         self.random_seed = random_seed
@@ -202,12 +203,16 @@ class RPTTableDataset(Dataset):
             target_column = str(table.columns[-1])
         if target_column not in table.columns:
             raise ValueError(f"target column '{target_column}' not found in the table")
-        if exceeds_feature_limit(table, self.max_num_features):
+        if self.max_hard_columns is not None and exceeds_feature_limit(
+            table, self.max_hard_columns
+        ):
             num_feature_columns = table.shape[1] - 1
             raise TableSkippedError(
                 f"table has {num_feature_columns} feature columns, "
-                f"exceeds limit {self.max_num_features}"
+                f"exceeds hard limit {self.max_hard_columns}"
             )
+        # Wide tables are otherwise NOT skipped: filter_table_frames below
+        # subsamples them down to max_num_columns (matches inference behavior).
 
         working_table = table.copy()
         if self.max_num_rows is not None and len(working_table) > self.max_num_rows:
@@ -303,6 +308,13 @@ class RPTParquetDataset(IterableDataset):
         self.categorical_unique_ratio_threshold = (
             self.table_rules.categorical_unique_ratio_threshold
         )
+        self.numeric_as_classification_max_unique = (
+            self.table_rules.numeric_as_classification_max_unique
+        )
+        self.classification_max_classes = (
+            self.table_rules.classification_max_classes
+        )
+        self.max_hard_columns = self.table_rules.max_hard_columns
         self.balance_classification_tasks = balance_classification_tasks
         self.random_seed = random_seed
         self.streaming_read_batch_size = self._resolve_streaming_read_batch_size(
@@ -322,6 +334,9 @@ class RPTParquetDataset(IterableDataset):
         self._regression_task_count = 0
         self._classification_task_count = 0
         self._balance_rng = np.random.default_rng(self.random_seed + 7919)
+        # Opt-in routing telemetry: log the realized reg/cls split every N
+        # specs. RPT_LOG_ROUTING_EVERY=0 (default) disables it.
+        self._routing_log_every = _resolve_int_env("RPT_LOG_ROUTING_EVERY", 0)
         # Incremented on every __iter__ so the file order is reshuffled per epoch
         # (with persistent_workers the same worker object is re-iterated each
         # epoch, so this advances correctly).
@@ -406,6 +421,25 @@ class RPTParquetDataset(IterableDataset):
         ).digest()
         return (self.random_seed + int.from_bytes(digest, "big")) % (2**32 - 1)
 
+    def _maybe_log_routing(self) -> None:
+        """Opt-in (RPT_LOG_ROUTING_EVERY>0) periodic log of the realized
+        regression/classification task split. Cheap: one modulo per spec."""
+        every = self._routing_log_every
+        if every <= 0:
+            return
+        total = self._regression_task_count + self._classification_task_count
+        if total == 0 or total % every != 0:
+            return
+        reg = self._regression_task_count
+        cls = self._classification_task_count
+        worker = get_worker_info()
+        wtag = f"[w{worker.id}]" if worker is not None else ""
+        print(
+            f"[routing]{wtag} specs={total} reg={reg} cls={cls} "
+            f"reg_share={reg / max(total, 1):.3f}",
+            flush=True,
+        )
+
     def _stream_specs_from_tables(
         self, table_stream: Iterator[tuple[str, str, pd.DataFrame]]
     ) -> Iterator[tuple[dict[str, object], pd.DataFrame]]:
@@ -464,13 +498,17 @@ class RPTParquetDataset(IterableDataset):
             if table is None:
                 continue
             cache_put(table_id, table)
-            if exceeds_feature_limit(table, self.max_num_features):
+            if self.max_hard_columns is not None and exceeds_feature_limit(
+                table, self.max_hard_columns
+            ):
                 continue
 
             regression_candidates, classification_candidates = get_target_candidates(
                 table,
                 numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
                 categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
+                numeric_as_classification_max_unique=self.numeric_as_classification_max_unique,
+                classification_max_classes=self.classification_max_classes,
             )
 
             specs_for_table: list[tuple[str, bool]] = []
@@ -502,6 +540,7 @@ class RPTParquetDataset(IterableDataset):
                     self._regression_task_count += 1
                 else:
                     self._classification_task_count += 1
+                self._maybe_log_routing()
                 yield spec, table
 
                 if not self.balance_classification_tasks:
@@ -637,7 +676,9 @@ class RPTParquetDataset(IterableDataset):
 
         for file_idx, parquet_path in enumerate(parquet_files):
             for chunk_idx, table in self._iter_table_chunks(parquet_path):
-                if exceeds_feature_limit(table, self.max_num_features):
+                if self.max_hard_columns is not None and exceeds_feature_limit(
+                    table, self.max_hard_columns
+                ):
                     continue
                 target_column = (
                     self.target_column
@@ -649,6 +690,8 @@ class RPTParquetDataset(IterableDataset):
                     num_rows=len(table),
                     numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
                     categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
+                    numeric_as_classification_max_unique=self.numeric_as_classification_max_unique,
+                    classification_max_classes=self.classification_max_classes,
                 )
                 if task_type == "regression":
                     is_regression = True
