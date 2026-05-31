@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 from collections import OrderedDict
 from math import ceil
@@ -264,6 +266,7 @@ class RPTParquetDataset(IterableDataset):
         table_rules: Optional[TableRulesConfig] = None,
         replay_buffer_size: int = 50_000,
         probe_cache_size: int = 100_000,
+        discover_parquet: bool = True,
     ):
         self.root_dir = Path(root_dir).expanduser().resolve()
         if not self.root_dir.exists():
@@ -305,13 +308,24 @@ class RPTParquetDataset(IterableDataset):
         self.streaming_read_batch_size = self._resolve_streaming_read_batch_size(
             streaming_read_batch_size
         )
-        self.parquet_files = sorted(self.root_dir.rglob("*.parquet"))
-        if not self.parquet_files:
-            raise FileNotFoundError(f"no parquet files found under {self.root_dir}")
+        # Subclasses that read from a manifest (RPTShardDataset) skip the
+        # rglob over millions of tiny files.
+        if discover_parquet:
+            self.parquet_files = sorted(self.root_dir.rglob("*.parquet"))
+            if not self.parquet_files:
+                raise FileNotFoundError(
+                    f"no parquet files found under {self.root_dir}"
+                )
+        else:
+            self.parquet_files = []
 
         self._regression_task_count = 0
         self._classification_task_count = 0
         self._balance_rng = np.random.default_rng(self.random_seed + 7919)
+        # Incremented on every __iter__ so the file order is reshuffled per epoch
+        # (with persistent_workers the same worker object is re-iterated each
+        # epoch, so this advances correctly).
+        self._epoch = -1
 
         # Cache sizes: env var beats config-passed value beats default.
         self.replay_buffer_size = _resolve_int_env(
@@ -380,112 +394,107 @@ class RPTParquetDataset(IterableDataset):
         rng = np.random.default_rng(seed)
         return candidates[int(rng.integers(0, len(candidates)))]
 
-    def _stream_auto_target_specs(
-        self, parquet_files: list[Path]
+    def _target_seed(self, table_id: str, salt: int) -> int:
+        """Deterministic per-table seed, stable across readers and epochs.
+
+        Seeding target selection by table_id (not file position) makes the
+        choice reproducible and identical between the raw-file and shard
+        readers, which is what lets the two be checked for parity.
+        """
+        digest = hashlib.blake2b(
+            f"{table_id}:{salt}".encode("utf-8"), digest_size=8
+        ).digest()
+        return (self.random_seed + int.from_bytes(digest, "big")) % (2**32 - 1)
+
+    def _stream_specs_from_tables(
+        self, table_stream: Iterator[tuple[str, str, pd.DataFrame]]
     ) -> Iterator[tuple[dict[str, object], pd.DataFrame]]:
-        """Streaming, paper-equivalent auto-select.
+        """Shared auto-select + class-balancing core for both readers.
 
-        Per file:
-          1. Probe (read first chunk).
-          2. Randomly pick one column from regression candidates (if any) and
-             one from classification candidates (if any).
-          3. Yield each fresh spec together with its probe table.
-          4. If `balance_classification_tasks` is on, after each fresh emission
-             pull replays from the minority side's history buffer until the
-             two counters are equal (paper's effect: oversample minority class).
+        ``table_stream`` yields ``(table_id, source_path, table)`` in the order
+        to consume (the caller does any per-epoch shuffling). For each table this
+        picks at most one regression and one classification target (seeded by
+        ``table_id`` so the choice is stable and reader-independent), emits those
+        specs, and — when ``balance_classification_tasks`` is on — replays cached
+        minority-class tables until the two task counters even out.
 
-        Memory layout: sizes come from `replay_buffer_size` / `probe_cache_size`
-        on the dataset (env vars `RPT_REPLAY_BUFFER_SIZE` / `RPT_PROBE_CACHE_SIZE`
-        override the config-passed values). Defaults assume ~256 GB hosts.
-          - history_reg / history_cls: bounded FIFO of (path, target_column)
-            tuples — lightweight (~250 B/entry).
-          - probe_cache: LRU of recent probe DataFrames; replays hit this
-            cache before falling back to disk re-reads.
+        Replays are served from an in-memory LRU keyed by ``table_id`` (capacity
+        ``probe_cache_size`` entries); a replay whose table has been evicted is
+        skipped (best-effort oversampling). There is no disk re-read on a cache
+        miss, which keeps the shard path I/O-free and bounds raw-path memory.
         """
         replay_buffer_size = self.replay_buffer_size
         probe_cache_size = self.probe_cache_size
-
-        order_rng = np.random.default_rng(self.random_seed)
-        shuffled_indices = np.arange(len(parquet_files))
-        order_rng.shuffle(shuffled_indices)
-
-        per_file_rng = np.random.default_rng(self.random_seed + 2)
         replay_rng = np.random.default_rng(self.random_seed + 3)
 
-        history_reg: list[tuple[Path, str]] = []
-        history_cls: list[tuple[Path, str]] = []
-        probe_cache: "OrderedDict[Path, pd.DataFrame]" = OrderedDict()
+        # (table_id, source_path, target) — lightweight FIFO history.
+        history_reg: list[tuple[str, str, str]] = []
+        history_cls: list[tuple[str, str, str]] = []
+        probe_cache: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
 
-        def cache_put(path: Path, table: pd.DataFrame) -> None:
-            if path in probe_cache:
-                probe_cache.move_to_end(path)
+        def cache_put(table_id: str, table: pd.DataFrame) -> None:
+            if table_id in probe_cache:
+                probe_cache.move_to_end(table_id)
                 return
-            probe_cache[path] = table
+            probe_cache[table_id] = table
             while len(probe_cache) > probe_cache_size:
                 probe_cache.popitem(last=False)
 
-        def cache_get_or_read(path: Path) -> Optional[pd.DataFrame]:
-            cached = probe_cache.get(path)
-            if cached is not None:
-                probe_cache.move_to_end(path)
-                return cached
-            table = self._read_probe_table(path)
-            if table is not None:
-                cache_put(path, table)
-            return table
-
-        def push_history(buf: list, path: Path, target: str) -> None:
-            buf.append((path, target))
+        def push_history(
+            buf: list, table_id: str, source_path: str, target: str
+        ) -> None:
+            buf.append((table_id, source_path, target))
             if len(buf) > replay_buffer_size:
                 buf.pop(0)
 
-        def replay_one(buf: list) -> Optional[tuple[Path, str, pd.DataFrame]]:
+        def replay_one(
+            buf: list,
+        ) -> Optional[tuple[str, str, str, pd.DataFrame]]:
             if not buf:
                 return None
             idx = int(replay_rng.integers(0, len(buf)))
-            path, target = buf[idx]
-            table = cache_get_or_read(path)
+            table_id, source_path, target = buf[idx]
+            table = probe_cache.get(table_id)
             if table is None:
                 return None
-            return path, target, table
+            probe_cache.move_to_end(table_id)
+            return table_id, source_path, target, table
 
-        for shuffled_idx in shuffled_indices:
-            file_idx = int(shuffled_idx)
-            parquet_path = parquet_files[file_idx]
-            table = cache_get_or_read(parquet_path)
+        for table_id, source_path, table in table_stream:
             if table is None:
                 continue
+            cache_put(table_id, table)
             if exceeds_feature_limit(table, self.max_num_features):
                 continue
 
-            regression_candidates, classification_candidates = (
-                get_target_candidates(
-                    table,
-                    numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
-                    categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
-                )
+            regression_candidates, classification_candidates = get_target_candidates(
+                table,
+                numeric_nan_ratio_threshold=self.numeric_nan_ratio_threshold,
+                categorical_unique_ratio_threshold=self.categorical_unique_ratio_threshold,
             )
 
-            specs_for_file: list[tuple[str, bool]] = []
+            specs_for_table: list[tuple[str, bool]] = []
             if regression_candidates:
                 target = self._choose_target_column(
-                    regression_candidates, self.random_seed + file_idx
+                    regression_candidates, self._target_seed(table_id, 0)
                 )
-                specs_for_file.append((target, True))
-                push_history(history_reg, parquet_path, target)
+                specs_for_table.append((target, True))
+                push_history(history_reg, table_id, source_path, target)
             if classification_candidates:
                 target = self._choose_target_column(
-                    classification_candidates,
-                    self.random_seed + len(parquet_files) + file_idx,
+                    classification_candidates, self._target_seed(table_id, 1)
                 )
-                specs_for_file.append((target, False))
-                push_history(history_cls, parquet_path, target)
+                specs_for_table.append((target, False))
+                push_history(history_cls, table_id, source_path, target)
 
-            per_file_rng.shuffle(specs_for_file)
+            np.random.default_rng(self._target_seed(table_id, 2)).shuffle(
+                specs_for_table
+            )
 
-            for target_column, is_regression in specs_for_file:
+            for target_column, is_regression in specs_for_table:
                 spec = {
-                    "source_path": parquet_path,
+                    "source_path": source_path,
+                    "table_id": table_id,
                     "target_column": target_column,
                     "is_regression": is_regression,
                 }
@@ -499,7 +508,7 @@ class RPTParquetDataset(IterableDataset):
                     continue
 
                 # Drain replays from the minority side until counters even out
-                # (or that side has nothing yet to replay from).
+                # (or that side has nothing cached to replay).
                 while (
                     self._regression_task_count != self._classification_task_count
                 ):
@@ -513,9 +522,10 @@ class RPTParquetDataset(IterableDataset):
                     replayed = replay_one(minority_history)
                     if replayed is None:
                         break
-                    rpath, rtarget, rtable = replayed
+                    rtable_id, rsource_path, rtarget, rtable = replayed
                     rspec = {
-                        "source_path": rpath,
+                        "source_path": rsource_path,
+                        "table_id": rtable_id,
                         "target_column": rtarget,
                         "is_regression": minority_is_reg,
                     }
@@ -524,6 +534,26 @@ class RPTParquetDataset(IterableDataset):
                     else:
                         self._classification_task_count += 1
                     yield rspec, rtable
+
+    def _stream_auto_target_specs(
+        self, parquet_files: list[Path], epoch: int = 0
+    ) -> Iterator[tuple[dict[str, object], pd.DataFrame]]:
+        """Raw-file auto-select: shuffle file order per epoch, probe each file's
+        first chunk, and delegate target selection + balancing to
+        :meth:`_stream_specs_from_tables`."""
+        order_rng = np.random.default_rng([self.random_seed, epoch])
+        shuffled_indices = np.arange(len(parquet_files))
+        order_rng.shuffle(shuffled_indices)
+
+        def table_stream() -> Iterator[tuple[str, str, pd.DataFrame]]:
+            for shuffled_idx in shuffled_indices:
+                parquet_path = parquet_files[int(shuffled_idx)]
+                table = self._read_probe_table(parquet_path)
+                if table is None:
+                    continue
+                yield parquet_path.stem, str(parquet_path), table
+
+        yield from self._stream_specs_from_tables(table_stream())
 
     def _iter_batches_from_table(
         self,
@@ -583,11 +613,12 @@ class RPTParquetDataset(IterableDataset):
 
         self._regression_task_count = 0
         self._classification_task_count = 0
+        self._epoch += 1
 
         yielded_any = False
         if self.auto_select_target:
             for spec_idx, (spec, probe_table) in enumerate(
-                self._stream_auto_target_specs(parquet_files)
+                self._stream_auto_target_specs(parquet_files, epoch=self._epoch)
             ):
                 for batch in self._iter_batches_from_table(
                     parquet_path=Path(spec["source_path"]),
@@ -644,6 +675,150 @@ class RPTParquetDataset(IterableDataset):
 
         if not yielded_any and worker_info is None:
             raise ValueError(f"no eligible parquet tables found under {self.root_dir}")
+
+
+class RPTShardDataset(RPTParquetDataset):
+    """Streaming dataset over repacked Arrow-IPC shards.
+
+    Consumes the ``manifest.json`` produced by ``scripts/repack_t4_shards.py``
+    instead of rglob-ing millions of tiny parquet files. Each shard record holds
+    one table as an Arrow-IPC ("feather") ``table_bytes`` blob; this reader
+    deserializes each blob back into a DataFrame and reuses
+    :class:`RPTParquetDataset`'s auto-select + balancing
+    (:meth:`_stream_specs_from_tables`) and batch construction
+    (:meth:`_iter_batches_from_table`). It always uses auto-select, which is the
+    paper-aligned pretraining default.
+    """
+
+    def __init__(self, manifest_path: Union[str, Path], *args, **kwargs):
+        manifest_path = Path(manifest_path).expanduser().resolve()
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"shard manifest does not exist: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text())
+        self.manifest_path = manifest_path
+        self.shards_root = manifest_path.parent
+        self.shard_entries = list(manifest.get("shards", []))
+        self.blob_format = manifest.get("blob_format", "feather")
+        # Reuse the parent config setup but skip the rglob over raw files.
+        kwargs["discover_parquet"] = False
+        super().__init__(self.shards_root, *args, **kwargs)
+        if not self.shard_entries:
+            raise FileNotFoundError(f"shard manifest lists no shards: {manifest_path}")
+        # Tables buffered for the streaming shuffle (light: holds blobs, not
+        # DataFrames). Env-overridable for memory tuning across workers.
+        self._shard_shuffle_buffer = _resolve_int_env("RPT_SHARD_SHUFFLE_BUFFER", 2048)
+
+    @staticmethod
+    def _shuffle_buffered(
+        stream: Iterator, buffer_size: int, rng: np.random.Generator
+    ) -> Iterator:
+        """Streaming shuffle: sequential input, randomized output, bounded memory.
+
+        Standard reservoir-style shuffle buffer (cf. tf.data.shuffle). Lets the
+        shard be read sequentially (good page-cache locality) while still
+        presenting tables in a shuffled order to the model.
+        """
+        if buffer_size <= 1:
+            yield from stream
+            return
+        buf: list = []
+        for item in stream:
+            if len(buf) < buffer_size:
+                buf.append(item)
+            else:
+                j = int(rng.integers(0, buffer_size))
+                yield buf[j]
+                buf[j] = item
+        # Drain the remainder, shuffled (manual Fisher-Yates — items hold bytes).
+        for k in range(len(buf) - 1, 0, -1):
+            j = int(rng.integers(0, k + 1))
+            buf[k], buf[j] = buf[j], buf[k]
+        yield from buf
+
+    def _iter_shard_records(
+        self, shard_path: Path
+    ) -> Iterator[tuple[str, str, bytes]]:
+        """Stream ``(table_id, source_path, blob)`` SEQUENTIALLY from one shard.
+
+        Sequential mmap access preserves read locality; random access into a
+        large on-disk shard thrashes the page cache (multi-second stalls).
+        Deserialization + shuffling happen downstream, so the shuffle buffer
+        holds light blobs rather than DataFrames.
+        """
+        try:
+            reader = pa.ipc.open_file(pa.memory_map(str(shard_path), "r"))
+        except (OSError, pa.ArrowException) as exc:
+            print(f"Skipping shard {shard_path} due to read error: {exc}")
+            return
+        for batch_idx in range(reader.num_record_batches):
+            record_batch = reader.get_batch(batch_idx)
+            table_ids = record_batch.column("table_id").to_pylist()
+            source_paths = record_batch.column("source_path").to_pylist()
+            blobs = record_batch.column("table_bytes")
+            for i in range(record_batch.num_rows):
+                blob = blobs[i].as_py()
+                if blob is not None:
+                    yield table_ids[i], source_paths[i], blob
+
+    def _blob_to_frame(self, table_id: str, blob: bytes) -> Optional[pd.DataFrame]:
+        try:
+            return pa.ipc.open_file(pa.BufferReader(blob)).read_all().to_pandas()
+        except (pa.ArrowException, ValueError) as exc:
+            print(f"Skipping table {table_id}: {exc}")
+            return None
+
+    def __iter__(self) -> Iterator[dict[str, object]]:
+        worker_info = get_worker_info()
+        shard_entries = self.shard_entries
+        if worker_info is not None:
+            shard_entries = shard_entries[worker_info.id :: worker_info.num_workers]
+            if not shard_entries:
+                return
+
+        self._regression_task_count = 0
+        self._classification_task_count = 0
+        self._epoch += 1
+
+        # Reshuffle shard order each epoch; a streaming shuffle buffer over the
+        # sequentially-read records gives intra-shard shuffling without random
+        # mmap access.
+        order_rng = np.random.default_rng([self.random_seed, self._epoch])
+        order = np.arange(len(shard_entries))
+        order_rng.shuffle(order)
+        buf_rng = np.random.default_rng([self.random_seed, self._epoch, 13])
+
+        def records() -> Iterator[tuple[str, str, bytes]]:
+            for oi in order:
+                entry = shard_entries[int(oi)]
+                yield from self._iter_shard_records(self.shards_root / entry["path"])
+
+        def table_stream() -> Iterator[tuple[str, str, pd.DataFrame]]:
+            for table_id, source_path, blob in self._shuffle_buffered(
+                records(), self._shard_shuffle_buffer, buf_rng
+            ):
+                df = self._blob_to_frame(table_id, blob)
+                if df is None or len(df) < self.min_num_rows:
+                    continue
+                yield table_id, source_path, df
+
+        yielded_any = False
+        for spec_idx, (spec, table) in enumerate(
+            self._stream_specs_from_tables(table_stream())
+        ):
+            for batch in self._iter_batches_from_table(
+                parquet_path=Path(spec["source_path"]),
+                table=table,
+                target_column=str(spec["target_column"]),
+                is_regression=bool(spec["is_regression"]),
+                seed=self.random_seed + spec_idx * 10_000,
+            ):
+                yielded_any = True
+                yield batch
+
+        if not yielded_any and worker_info is None:
+            raise ValueError(
+                f"no eligible tables found in shards under {self.shards_root}"
+            )
 
 
 class MixedRPTDataset(IterableDataset):

@@ -158,6 +158,18 @@ def run_profile(args):
     )
     if args.num_workers is not None:
         config = dataclasses.replace(config, num_workers=args.num_workers)
+    if args.data_root is not None:
+        config = dataclasses.replace(config, data_root_path=Path(args.data_root))
+    if args.shard_manifest is not None:
+        config = dataclasses.replace(
+            config, shard_manifest_path=Path(args.shard_manifest)
+        )
+    if args.embedder_backend is not None:
+        config = dataclasses.replace(
+            config, sentence_embedder_backend=args.embedder_backend
+        )
+    if args.tei_base_url is not None:
+        config = dataclasses.replace(config, tei_base_url=args.tei_base_url)
     seed_everything(config.random_seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -166,7 +178,8 @@ def run_profile(args):
     print(f"[profile] device={device} autocast_dtype={autocast_dtype}")
     print(f"[profile] config: max_num_rows={config.stage1_max_num_rows} "
           f"max_num_columns={config.table_rules.max_num_columns} "
-          f"num_workers={config.num_workers}")
+          f"num_workers={config.num_workers} "
+          f"embedder={config.sentence_embedder_backend}")
 
     # ---- model + optimizer ----
     initial_checkpoint = (
@@ -400,6 +413,29 @@ def main():
         type=int,
         default=None,
         help="Override config.num_workers for this profile run.",
+    )
+    parser.add_argument(
+        "--data-root",
+        default=None,
+        help="Override config.data_root_path (raw-file reader).",
+    )
+    parser.add_argument(
+        "--shard-manifest",
+        default=None,
+        help="Profile the shard reader via this manifest.json (overrides "
+        "config.shard_manifest_path).",
+    )
+    parser.add_argument(
+        "--embedder-backend",
+        choices=["local", "tei"],
+        default=None,
+        help="Sentence-embedding backend: local (in-process) or tei (server).",
+    )
+    parser.add_argument(
+        "--tei-base-url",
+        default=None,
+        help="TEI OpenAI endpoint when --embedder-backend tei "
+        "(e.g. http://localhost:8080/v1).",
     )
     parser.add_argument(
         "--use-cached-batch",

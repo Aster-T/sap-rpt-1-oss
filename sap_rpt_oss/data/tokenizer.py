@@ -17,7 +17,7 @@ from sap_rpt_oss.constants import (
     QUANTILE_DIMENSION_DEFAULT,
     embedding_model_to_dimension_and_pooling,
 )
-from sap_rpt_oss.data.sentence_embedder import SentenceEmbedder
+from sap_rpt_oss.data.sentence_embedder import RemoteEmbedder, SentenceEmbedder
 from sap_rpt_oss.utils.lru_cache import LRU_Cache
 
 DEFAULT_SENTENCE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -45,6 +45,9 @@ class Tokenizer:
         clip_quantile: float = 0.02,
         sentence_embedding_model_name: str = DEFAULT_SENTENCE_EMBEDDING_MODEL,
         sentence_embedder_device: Optional[Union[str, torch.device]] = None,
+        embedder_backend: str = "local",
+        tei_base_url: Optional[str] = None,
+        tei_batch_size: int = 128,
         verbose: bool = True,
     ):
         self.regression_type = regression_type
@@ -80,10 +83,27 @@ class Tokenizer:
             sentence_embedding_model_name
         ][0]
 
-        self.sentence_embedder = SentenceEmbedder(
-            self.sentence_embedding_model_name,
-            device=sentence_embedder_device,
-        )
+        if embedder_backend == "tei":
+            if not tei_base_url:
+                raise ValueError(
+                    "embedder_backend='tei' requires tei_base_url "
+                    "(e.g. http://localhost:8080/v1)"
+                )
+            # Embedding runs in the TEI server; the local device arg is unused.
+            self.sentence_embedder = RemoteEmbedder(
+                self.sentence_embedding_model_name,
+                base_url=tei_base_url,
+                batch_size=tei_batch_size,
+            )
+        elif embedder_backend == "local":
+            self.sentence_embedder = SentenceEmbedder(
+                self.sentence_embedding_model_name,
+                device=sentence_embedder_device,
+            )
+        else:
+            raise ValueError(
+                f"unknown embedder_backend: {embedder_backend!r} (use 'local' or 'tei')"
+            )
         self.cache = LRU_Cache(max_size=int(os.getenv("LRU_CACHE_SIZE", 10_000_000)))
 
     def texts_to_tensor(self, texts: Collection[str]) -> torch.Tensor:

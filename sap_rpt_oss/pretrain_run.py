@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from sap_rpt_oss.configs import FINETUNE_CONFIG, FinetuneConfig
-from sap_rpt_oss.data.ds import MixedRPTDataset, RPTParquetDataset
+from sap_rpt_oss.data.ds import MixedRPTDataset, RPTParquetDataset, RPTShardDataset
 from sap_rpt_oss.data.tokenizer import Tokenizer
 from sap_rpt_oss.model.torch_model import RPT
 
@@ -91,9 +91,9 @@ def _build_single_dataset(
     tokenizer: Tokenizer,
     data_root: Path,
     max_num_rows: int,
+    manifest_path: Optional[Path] = None,
 ) -> RPTParquetDataset:
-    return RPTParquetDataset(
-        root_dir=data_root,
+    common_kwargs = dict(
         fit_size=None,
         tokenizer=tokenizer,
         target_column=config.target_column,
@@ -109,6 +109,9 @@ def _build_single_dataset(
         replay_buffer_size=config.replay_buffer_size,
         probe_cache_size=config.probe_cache_size,
     )
+    if manifest_path is not None:
+        return RPTShardDataset(manifest_path=manifest_path, **common_kwargs)
+    return RPTParquetDataset(root_dir=data_root, **common_kwargs)
 
 
 def build_dataloader(
@@ -119,8 +122,13 @@ def build_dataloader(
     secondary_data_root: Optional[Path] = None,
     mixing_ratio: float = 0.8,
 ) -> DataLoader:
-    dataset = _build_single_dataset(config, tokenizer, data_root, max_num_rows)
+    dataset = _build_single_dataset(
+        config, tokenizer, data_root, max_num_rows,
+        manifest_path=config.shard_manifest_path,
+    )
     if secondary_data_root is not None:
+        # Curriculum stage-2 secondary source stays on the raw-file reader for
+        # now; shard support there would need its own manifest.
         secondary = _build_single_dataset(
             config, tokenizer, secondary_data_root, max_num_rows
         )
@@ -134,9 +142,12 @@ def build_dataloader(
     dataloader_kwargs = {
         "batch_size": None,
         "num_workers": config.num_workers,
+        # Pinned host memory speeds up the async H2D copy of batch tensors.
+        "pin_memory": torch.cuda.is_available(),
     }
     if config.num_workers > 0:
         dataloader_kwargs["persistent_workers"] = True
+        dataloader_kwargs["prefetch_factor"] = config.prefetch_factor
     return DataLoader(dataset, **dataloader_kwargs)
 
 
@@ -157,6 +168,9 @@ def build_model_and_tokenizer(
         clip_quantile=0.02,  # paper Section 3.1 — pretraining uses 2/98 quantile clipping
         sentence_embedding_model_name=config.sentence_embedding_model_name,
         sentence_embedder_device=tokenizer_device,
+        embedder_backend=config.sentence_embedder_backend,
+        tei_base_url=config.tei_base_url,
+        tei_batch_size=config.tei_batch_size,
         verbose=False,
     )
 

@@ -35,6 +35,10 @@ class TableRulesConfig:
 @dataclass
 class FinetuneConfig:
     data_root_path: Path = Path("datasets/t4/datas")
+    # If set, training reads repacked Arrow-IPC shards via this manifest.json
+    # (see scripts/repack_t4_shards.py) instead of rglob-ing the millions of raw
+    # parquet files under data_root_path. None → use the raw-file reader.
+    shard_manifest_path: Path | None = None
     output_root_path: Path = Path("outputs/finetune")
     # True: initialize model weights from scratch. False: load from resume_checkpoint_path.
     pretrain_from_scratch: bool = False
@@ -53,7 +57,13 @@ class FinetuneConfig:
     max_steps: int = 8_000_000
     max_epochs: int = 5
     micro_batch_size: int = 1
-    num_workers: int = 0
+    # >0 overlaps parquet read + tokenization (incl. the sentence-embedding
+    # forward, forced to CPU when num_workers>0; see build_model_and_tokenizer)
+    # with GPU compute. Each worker holds its own embedder + caches, so host RAM
+    # scales with num_workers (MiniLM ~90MB, Qwen3-0.6B ~1.2GB per worker).
+    num_workers: int = 4
+    # Batches each worker prefetches ahead (only used when num_workers>0).
+    prefetch_factor: int = 2
     accumulate_grad_batches: int | None = None
     gradient_clip_val: float = 1.0
     log_every_n_steps: int = 50
@@ -63,6 +73,14 @@ class FinetuneConfig:
     combination_type: str = "sum"  # "sum" (paper) or "film" (Exp 1/3 ablation)
     use_weekday: bool = False  # paper does not use weekday in date encoding
     sentence_embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Sentence-embedding backend: "local" (in-process transformer, default) or
+    # "tei" (offload to a text-embeddings-inference server via its
+    # OpenAI-compatible API — see scripts/tei_run.sh). TEI normalizes MiniLM
+    # output while local does not, so keep training and inference on the same
+    # backend.
+    sentence_embedder_backend: str = "local"
+    tei_base_url: str = "http://localhost:8080/v1"
+    tei_batch_size: int = 128
 
     # Table filtering and target-selection rules aligned with the pretraining setup.
     table_rules: TableRulesConfig = field(
@@ -89,9 +107,11 @@ class FinetuneConfig:
     # FIFO buffer of (path, target_column) tuples per task type — bounds the
     # window from which oversample replays are sampled. Lightweight (~250 B/entry).
     replay_buffer_size: int = 50_000
-    # LRU of probe DataFrames keyed by parquet path. Replays hit this before
-    # falling back to disk re-reads. Heavy (~tens to hundreds of KB per entry).
-    probe_cache_size: int = 1_000_000
+    # LRU of probe DataFrames keyed by parquet path. This is an ENTRY-COUNT cap
+    # (number of cached DataFrames), not a byte budget. Each entry is a probe
+    # table (~tens to hundreds of KB), and with millions of distinct t4 files an
+    # oversized cap effectively makes it unbounded → RAM growth. Keep it bounded.
+    probe_cache_size: int = 50_000
 
     # Stage 1.
     stage1_max_num_rows: int = 1000
@@ -173,7 +193,7 @@ def get_paper_aligned_pretrain_config() -> FinetuneConfig:
         learning_rate=1e-4,
         warmup_steps=1000,
         gradient_clip_val=1.0,
-        max_steps=8_000_000,
+        max_steps=10_000,
         accumulate_grad_batches=256,
         stage1_max_num_rows=1000,
         query_size_range=(50, 900),
