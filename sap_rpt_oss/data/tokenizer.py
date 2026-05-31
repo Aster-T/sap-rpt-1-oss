@@ -48,6 +48,9 @@ class Tokenizer:
         embedder_backend: str = "local",
         tei_base_url: Optional[str] = None,
         tei_batch_size: int = 128,
+        add_cell_text: bool = False,
+        cell_text_serialization: str = "s2",
+        cell_text_bins: int = 10,
         verbose: bool = True,
     ):
         self.regression_type = regression_type
@@ -55,6 +58,10 @@ class Tokenizer:
         self.random_seed = random_seed
         self.num_regression_bins = num_regression_bins
         self.verbose = verbose
+        # Per-cell text injection channel (S0/S1/S2 ladder; "placebo" for control).
+        self.add_cell_text = add_cell_text
+        self.cell_text_serialization = cell_text_serialization
+        self.cell_text_bins = cell_text_bins
 
         if is_valid is not None:
             warnings.warn(
@@ -556,5 +563,22 @@ class Tokenizer:
             data, y_context, y_query, classification_or_regression
         )
         data = self.process_features(X_context, X_query, data)
+
+        if getattr(self, "add_cell_text", False):
+            mode = self.cell_text_serialization
+            if mode == "placebo":
+                from sap_rpt_oss.data.tokenizer_hook import add_placebo_channel
+
+                data = add_placebo_channel(
+                    self, X_context, X_query, data,
+                    num_quantile_bins=self.cell_text_bins,
+                )
+            else:
+                from sap_rpt_oss.data.tokenizer_hook import add_celltext_channel
+
+                data = add_celltext_channel(
+                    self, X_context, X_query, data,
+                    mode=mode, num_quantile_bins=self.cell_text_bins,
+                )
 
         return data, torch.tensor(labels), label_classes

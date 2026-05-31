@@ -53,6 +53,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
         combination_type: Literal["sum", "film"] = "sum",
         use_weekday: bool = False,
         sentence_embedding_dim: int = 384,
+        add_cell_text: bool = False,
         verbose: bool = False,
         **kwargs,
     ):
@@ -73,6 +74,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
         self.combination_type = combination_type
         self.use_weekday = use_weekday
         self.sentence_embedding_dim = sentence_embedding_dim
+        self.add_cell_text = add_cell_text
         max_number_of_labels = Tokenizer.QUANTILE_DIMENSION
 
         if self.classification_type in ["clustering", "clustering-cosine"]:
@@ -111,6 +113,7 @@ class RPT(nn.Module, ModuleUtilsMixin):
             sentence_embedding_dim=sentence_embedding_dim,
             combination_type=combination_type,
             use_weekday=use_weekday,
+            add_cell_text=add_cell_text,
         )
         if weight_sharing:
             shared_layer = TwoDimensionalAttentionLayer(self.config)
@@ -600,18 +603,34 @@ class RPT(nn.Module, ModuleUtilsMixin):
         # In FiLM mode the checkpoint may have been trained with combination_type="sum"
         # and so will not contain `embeddings.film.*` keys. We accept missing keys
         # only for the FiLM module — anything else is still a real load error.
-        is_film = getattr(self, "combination_type", "sum") == "film"
+        # A checkpoint trained without an optional, zero-initialized module won't
+        # contain its keys. We tolerate MISSING keys only for such opt-in modules
+        # (kept at zero-init so the forward pass is unchanged at load time): FiLM
+        # (combination_type="film") and the per-cell text channel
+        # (add_cell_text=True). Anything else missing/unexpected is a real error.
+        allowed_missing_prefixes = []
+        if getattr(self, "combination_type", "sum") == "film":
+            allowed_missing_prefixes.append("embeddings.film.")
+        if getattr(self, "add_cell_text", False):
+            allowed_missing_prefixes.append("embeddings.celltext")
 
         def _load(sd):
-            if is_film:
+            if allowed_missing_prefixes:
                 missing, unexpected = self.load_state_dict(sd, strict=False)
-                non_film_missing = [k for k in missing if not k.startswith("embeddings.film.")]
-                if non_film_missing or unexpected:
+                bad_missing = [
+                    k
+                    for k in missing
+                    if not any(k.startswith(p) for p in allowed_missing_prefixes)
+                ]
+                if bad_missing or unexpected:
                     raise RuntimeError(
-                        f"strict=False load failed beyond FiLM: missing={non_film_missing}, "
-                        f"unexpected={list(unexpected)}"
+                        f"strict=False load failed beyond {allowed_missing_prefixes}: "
+                        f"missing={bad_missing}, unexpected={list(unexpected)}"
                     )
-                print("FiLM parameters initialized from scratch (not in checkpoint).")
+                print(
+                    "Optional module params initialized from scratch (not in "
+                    f"checkpoint): {allowed_missing_prefixes}"
+                )
             else:
                 self.load_state_dict(sd)
 

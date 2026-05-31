@@ -95,6 +95,9 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         drop_constant_columns: bool = True,
         test_chunk_size: int = 1000,
         is_valid: bool = True,
+        add_cell_text: bool = False,
+        cell_text_serialization: str = "s2",
+        cell_text_bins: int = 10,
     ):
 
         self.checkpoint = checkpoint
@@ -136,10 +139,15 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
         self.max_context_size = max_context_size
         self.is_valid = is_valid
         self.num_regression_bins = 16
+        # Per-cell text injection channel (S0/S1/S2 ladder; "placebo" for control).
+        self.add_cell_text = add_cell_text
+        self.cell_text_serialization = cell_text_serialization
+        self.cell_text_bins = cell_text_bins
         self.model = RPT(
             self.model_size,
             regression_type=self.regression_type,
             classification_type=self.classification_type,
+            add_cell_text=add_cell_text,
         )
         # We're using a single GPU here, even if more are available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -165,6 +173,9 @@ class SAP_RPT_OSS_Estimator(BaseEstimator, ABC):
             random_seed=self.seed,
             num_regression_bins=self.num_regression_bins,
             clip_quantile=clip_quantile,
+            add_cell_text=add_cell_text,
+            cell_text_serialization=cell_text_serialization,
+            cell_text_bins=cell_text_bins,
         )
         self.model.to(self.device).eval()
 

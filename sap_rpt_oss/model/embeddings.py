@@ -76,6 +76,7 @@ class CellEmbeddings(nn.Module):
         sentence_embedding_dim: Optional[int] = None,
         combination_type: Literal["sum", "film"] = "sum",
         use_weekday: bool = False,
+        add_cell_text: bool = False,
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -116,6 +117,20 @@ class CellEmbeddings(nn.Module):
 
         if self.combination_type == "film":
             self.film = FiLMGenerator(config.hidden_size)
+
+        # Per-cell text injection channel (S0/S1/S2 ladder). Zero-init projection +
+        # a zero scalar gate => the channel is a no-op at initialization, so the
+        # forward pass is bit-exact vs the original and a checkpoint loads cleanly;
+        # continued training learns the gate. Input dim matches the tokenizer's
+        # sentence embedding (384 for the default frozen MiniLM).
+        self.add_cell_text = add_cell_text
+        if self.add_cell_text:
+            self.celltext_remapping = nn.Linear(
+                sentence_embedding_dim, config.hidden_size
+            )
+            nn.init.zeros_(self.celltext_remapping.weight)
+            nn.init.zeros_(self.celltext_remapping.bias)
+            self.celltext_gate = nn.Parameter(torch.zeros(1))
 
         self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -203,6 +218,17 @@ class CellEmbeddings(nn.Module):
             input_embeds = gamma * cell_sum + beta + column_embeds
         else:
             input_embeds = column_embeds + content_embeds + number_embeds + date_embeds
+
+        # Per-cell text channel: verbalized number/date cells -> MiniLM -> projection,
+        # added in (same as a zero-init residual adapter). gate=0 + zero-init weights
+        # => no-op at init. Target column (-1) is never injected.
+        if self.add_cell_text and "celltext_embeddings" in input_dict:
+            celltext = input_dict["celltext_embeddings"].type(
+                self.celltext_remapping.weight.dtype
+            )
+            celltext_embeds = self.celltext_remapping(celltext)
+            celltext_embeds[:, -1] = 0
+            input_embeds = input_embeds + self.celltext_gate * celltext_embeds
 
         if is_classification and self.is_target_content_mapping:
             # use the text embeddings, but pass them through a dedicated linear layer for the target column
