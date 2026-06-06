@@ -2,10 +2,10 @@
 Profile a training loop to find where time goes.
 
 Usage:
-    python scripts/profile_training_bottleneck.py
-    python scripts/profile_training_bottleneck.py --iters 100 --warmup 10
-    python scripts/profile_training_bottleneck.py --num-workers 4
-    python scripts/profile_training_bottleneck.py --use-cached-batch  # GPU-only stress
+    python scripts/analysis/profile_training_bottleneck.py
+    python scripts/analysis/profile_training_bottleneck.py --iters 100 --warmup 10
+    python scripts/analysis/profile_training_bottleneck.py --num-workers 4
+    python scripts/analysis/profile_training_bottleneck.py --use-cached-batch  # GPU-only stress
 
 Reports per-stage timing across the training step, samples GPU utilization
 during compute, and gives actionable recommendations.
@@ -23,7 +23,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Optional
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 

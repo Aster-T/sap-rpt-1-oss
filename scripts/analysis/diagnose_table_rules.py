@@ -11,7 +11,7 @@ handling change. Use it to pick:
   * max_num_columns                       -> column-count distribution + per-cap rates
 
 Usage (env python; CPU only, no GPU):
-  /home/amax/.conda/envs/rpt/bin/python scripts/diagnose_table_rules.py \
+  /home/amax/.conda/envs/rpt/bin/python scripts/analysis/diagnose_table_rules.py \
       --input-root datasets/t4/datas --limit-chunks 25 --sample-per-chunk 200
 """
 
@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 

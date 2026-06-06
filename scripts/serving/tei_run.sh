@@ -7,16 +7,16 @@
 # the MiniLM transformer forward out of the data workers into one batched GPU
 # service, so the workers become thin HTTP clients.
 #
-# Run this in its own terminal (like scripts/vllm_run.sh). GPU is the free RTX
+# Run this in its own terminal (like scripts/serving/vllm_run.sh). GPU is the free RTX
 # 4090 = nvidia-smi index 2 (Ada / sm_89 → the "89" image tag).
 #
 # After it prints "Ready", validate with:
-#   /home/amax/.conda/envs/rpt/bin/python scripts/tei_smoke.py
+#   /home/amax/.conda/envs/rpt/bin/python scripts/serving/tei_smoke.py
 set -euo pipefail
 
 MODEL="${MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
 PORT="${PORT:-8080}"
-GPU="${GPU:-1}"                       # nvidia-smi GPU index (free 4090)
+GPU="${GPU:-2}"                       # nvidia-smi GPU index (free 4090)
 # Pick the TEI image by the target GPU's arch unless IMAGE is set explicitly
 # (sm_89 kernels won't run on an sm_80 A800, so the tag must match the card).
 _gpu_name="$(nvidia-smi --id="${GPU}" --query-gpu=name --format=csv,noheader 2>/dev/null || true)"

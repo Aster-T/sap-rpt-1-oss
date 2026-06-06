@@ -27,12 +27,12 @@ Properties:
     distribution, so it is opt-in.
 
 Usage:
-    python scripts/repack_t4_shards.py \
+    python scripts/data_prep/repack_t4_shards.py \
         --input-root datasets/t4/datas \
         --output-root datasets/t4/shards \
         --shard-size-mb 384 --workers 16
     # smoke test on the first 2 chunks:
-    python scripts/repack_t4_shards.py --input-root datasets/t4/datas \
+    python scripts/data_prep/repack_t4_shards.py --input-root datasets/t4/datas \
         --output-root /tmp/t4_shards_smoke --workers 8 --limit-chunks 2
 
 The reader side lives in sap_rpt_oss/data/ds.py (RPTShardDataset), driven by

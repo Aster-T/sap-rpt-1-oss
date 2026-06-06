@@ -1,8 +1,8 @@
 """Validate the TEI embedding backend and its relationship to the local one.
 
-Run AFTER starting the server (scripts/tei_run.sh):
-    /home/amax/.conda/envs/rpt/bin/python scripts/tei_smoke.py
-    python scripts/tei_smoke.py --base-url http://localhost:8080/v1 --no-local
+Run AFTER starting the server (scripts/serving/tei_run.sh):
+    /home/amax/.conda/envs/rpt/bin/python scripts/serving/tei_smoke.py
+    python scripts/serving/tei_smoke.py --base-url http://localhost:8080/v1 --no-local
 
 Checks: (1) TEI responds via the OpenAI client and returns the expected dim;
 (2) how TEI vectors relate to the local SentenceEmbedder — for MiniLM, TEI
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
@@ -43,7 +43,7 @@ def main():
     try:
         tei = remote.embed(SAMPLES)
     except Exception as exc:  # noqa: BLE001
-        sys.exit(f"TEI request failed (is scripts/tei_run.sh running?): {exc}")
+        sys.exit(f"TEI request failed (is scripts/serving/tei_run.sh running?): {exc}")
 
     tei = np.asarray(tei, dtype=np.float32)
     print(f"TEI: shape={tei.shape} dtype set to float16 in pipeline")
